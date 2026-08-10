@@ -117,7 +117,7 @@ namespace SolidWorksAssetExporter.AddIn
         private void ExportClicked(object sender, EventArgs args)
         {
             if (_analysis == null) return;
-            if (MessageBox.Show(this, _analysis.Preview + Environment.NewLine + Environment.NewLine + "确认执行以上导出？",
+            if (MessageBox.Show(this, _analysis.Preview + System.Environment.NewLine + System.Environment.NewLine + "确认执行以上导出？",
                 Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             Execute(delegate
             {

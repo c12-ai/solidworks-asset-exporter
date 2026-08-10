@@ -60,7 +60,8 @@ namespace SolidWorksAssetExporter.AddIn
             int errors = 0;
             var group = _commands.CreateCommandGroup2(CommandGroupId, "Asset / Project 导出", "导出 Asset 库和 Project 装配 XML",
                 "Asset / Project 导出", -1, true, ref errors);
-            if (group == null || errors != 0) throw new InvalidOperationException("无法创建 SOLIDWORKS 命令组，错误码: " + errors);
+            if (group == null || errors != (int)swCreateCommandGroupErrors.swCreateCommandGroup_Success)
+                throw new InvalidOperationException("无法创建 SOLIDWORKS 命令组，错误码: " + errors);
             group.AddCommandItem2("Asset / Project 导出", -1, "分类预览并导出", "Asset / Project 导出", -1,
                 "OnExport", "CanExport", 0, (int)swCommandItemType_e.swMenuItem);
             group.HasMenu = true; group.HasToolbar = false; group.Activate();

@@ -19,6 +19,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Only Asset-containing branch descends", NestedAssetOnlyDescendsRequiredBranch);
             Run("All-project root stays one unit", AllProjectRoot);
             Run("Top Asset stays one opaque unit", TopAssetRoot);
+            Run("Repeated part occurrences share Asset identity", RepeatedPartOccurrencesShareAssetIdentity);
             Run("Hidden/suppressed/envelope nodes are ignored", VisibilityFiltering);
             Run("Mixed root requires fixed component", MixedRootRequiresFixedComponent);
             Run("Duplicate property scope fails", DuplicatePropertyScopeFails);
@@ -105,6 +106,22 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(ExportNodeKind.Asset, plan.Roots[0].Kind);
             Equal(0, root.GetChildrenCalls);
             True(plan.Roots[0].AssetId.EndsWith(":4", StringComparison.Ordinal));
+        }
+
+        private static void RepeatedPartOccurrencesShareAssetIdentity()
+        {
+            var root = Root();
+            var firstModel = Descriptor("Follower"); firstModel.DocumentKind = DocumentKind.Part;
+            var secondModel = Descriptor("Follower"); secondModel.DocumentKind = DocumentKind.Part;
+            var first = new FakeNode("Follower-1", firstModel, true, false);
+            var second = new FakeNode("Follower-3", secondModel, false, false);
+            MarkAsset(first, 1); MarkAsset(second, 1); root.Add(first, second);
+
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+            var assets = plan.Roots.Where(node => node.Kind == ExportNodeKind.Asset).ToList();
+            Equal(2, assets.Count);
+            Equal(1, assets.Select(node => node.AssetId).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            True(!string.Equals(assets[0].Id, assets[1].Id, StringComparison.OrdinalIgnoreCase));
         }
 
         private static void VisibilityFiltering()

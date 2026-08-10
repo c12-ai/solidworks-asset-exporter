@@ -13,13 +13,21 @@ namespace SolidWorksAssetExporter.AddIn
     {
         private readonly Component2 _component;
         private readonly SldWorks _application;
+        private readonly bool _isTraversalRoot;
         private ModelDescriptor _model;
 
         public SwCadNode(SldWorks application, Component2 component, string instancePath)
+            : this(application, component, instancePath, false, null)
+        {
+        }
+
+        internal SwCadNode(SldWorks application, Component2 component, string instancePath,
+            bool isTraversalRoot, string traversalRootName)
         {
             _application = application; _component = component;
-            Name = component == null ? "<root>" : component.Name2;
-            InstanceId = component == null ? "root" : component.GetID().ToString();
+            _isTraversalRoot = isTraversalRoot;
+            Name = isTraversalRoot ? traversalRootName : (component == null ? "<root>" : component.Name2);
+            InstanceId = isTraversalRoot || component == null ? "root" : component.GetID().ToString();
             InstancePath = instancePath ?? "/";
         }
 
@@ -28,7 +36,9 @@ namespace SolidWorksAssetExporter.AddIn
         {
             get
             {
-                var document = _component == null ? _application.ActiveDoc as ModelDoc2 : _component.GetModelDoc2() as ModelDoc2;
+                var document = _isTraversalRoot || _component == null
+                    ? _application.ActiveDoc as ModelDoc2
+                    : _component.GetModelDoc2() as ModelDoc2;
                 if (document == null) throw new ValidationException("组件 [" + Name + "] 的模型未解析或未加载。");
                 return document;
             }
@@ -37,17 +47,17 @@ namespace SolidWorksAssetExporter.AddIn
         public string InstanceId { get; private set; }
         public string Name { get; private set; }
         public string InstancePath { get; private set; }
-        public bool IsVisible { get { return _component == null || _component.Visible == (int)swComponentVisibilityState_e.swComponentVisible; } }
-        public bool IsSuppressed { get { return _component != null && _component.IsSuppressed(); } }
-        public bool IsEnvelope { get { return _component != null && _component.IsEnvelope(); } }
-        public bool IsFixed { get { return _component != null && _component.IsFixed(); } }
+        public bool IsVisible { get { return _isTraversalRoot || _component == null || _component.Visible == (int)swComponentVisibilityState_e.swComponentVisible; } }
+        public bool IsSuppressed { get { return !_isTraversalRoot && _component != null && _component.IsSuppressed(); } }
+        public bool IsEnvelope { get { return !_isTraversalRoot && _component != null && _component.IsEnvelope(); } }
+        public bool IsFixed { get { return !_isTraversalRoot && _component != null && _component.IsFixed(); } }
         public ModelDescriptor Model { get { return _model ?? (_model = ReadModel()); } }
 
         public Matrix4 WorldTransform
         {
             get
             {
-                if (_component == null || _component.Transform2 == null) return Matrix4.Identity;
+                if (_isTraversalRoot || _component == null || _component.Transform2 == null) return Matrix4.Identity;
                 var values = (double[])_component.Transform2.ArrayData;
                 if (values == null || values.Length < 13) throw new ValidationException("组件变换矩阵格式无效: " + Name);
                 var scale = values[12];
@@ -83,15 +93,14 @@ namespace SolidWorksAssetExporter.AddIn
         {
             var document = Document;
             var path = document.GetPathName();
-            var configuration = _component == null
-                ? document.ConfigurationManager.ActiveConfiguration.Name
-                : _component.ReferencedConfiguration;
-            var displayState = ReadDisplayState(document, configuration);
+            var activeConfiguration = document.ConfigurationManager.ActiveConfiguration;
+            var configuration = activeConfiguration.Name;
+            var displayState = ReadDisplayState(activeConfiguration);
             var descriptor = new ModelDescriptor
             {
                 FullPath = path,
                 FileName = Path.GetFileName(path),
-                InternalCreationTime = NormalizeCreationTime(Convert.ToString(((dynamic)document).SummaryInfo[(int)swSummInfoField_e.swSumInfoCreateDate])),
+                InternalCreationTime = NormalizeCreationTime(Convert.ToString(document.get_SummaryInfo((int)swSummInfoField_e.swSumInfoCreateDate))),
                 Configuration = configuration ?? string.Empty,
                 DisplayState = displayState,
                 DocumentKind = ToDocumentKind(document.GetType()),
@@ -103,17 +112,11 @@ namespace SolidWorksAssetExporter.AddIn
             return descriptor;
         }
 
-        private string ReadDisplayState(ModelDoc2 document, string configuration)
+        private static string ReadDisplayState(Configuration configuration)
         {
             try
             {
-                if (_component != null)
-                {
-                    var value = _component.ReferencedDisplayState2;
-                    if (!string.IsNullOrWhiteSpace(value)) return value;
-                }
-                var config = document.GetConfigurationByName(configuration) as Configuration;
-                var names = config == null ? null : config.GetDisplayStates() as string[];
+                var names = configuration == null ? null : configuration.GetDisplayStates() as string[];
                 return names == null || names.Length == 0 ? string.Empty : names[0];
             }
             catch { return string.Empty; }
@@ -161,7 +164,11 @@ namespace SolidWorksAssetExporter.AddIn
             var configuration = document.ConfigurationManager.ActiveConfiguration;
             var component = configuration.GetRootComponent3(true);
             if (component == null) throw new ValidationException("活动配置没有可用的根组件。");
-            return new SwCadNode(application, component, "/" + component.Name2);
+            var rootName = Path.GetFileNameWithoutExtension(document.GetPathName());
+            if (string.IsNullOrWhiteSpace(rootName))
+                rootName = Path.GetFileNameWithoutExtension(document.GetTitle());
+            if (string.IsNullOrWhiteSpace(rootName)) rootName = "<root>";
+            return new SwCadNode(application, component, "/" + rootName, true, rootName);
         }
     }
 }

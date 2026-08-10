@@ -205,21 +205,25 @@ namespace SolidWorksAssetExporter.AddIn
         private static string BuildPreview(IEnumerable<ExportNode> roots, IDictionary<string, AssetInspection> assets)
         {
             var builder = new StringBuilder(); var values = roots.ToList();
-            for (var i = 0; i < values.Count; i++) AppendPreview(builder, values[i], string.Empty, i == values.Count - 1, assets);
+            var seenAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < values.Count; i++)
+                AppendPreview(builder, values[i], string.Empty, i == values.Count - 1, assets, seenAssets);
             return builder.ToString().TrimEnd();
         }
 
         private static void AppendPreview(StringBuilder builder, ExportNode node, string indent, bool last,
-            IDictionary<string, AssetInspection> assets)
+            IDictionary<string, AssetInspection> assets, ISet<string> seenAssets)
         {
             builder.Append(indent).Append(last ? "└─ " : "├─ ").Append(node.Kind.ToString().PadRight(8)).Append(' ').Append(node.Name);
             if (node.Kind == ExportNodeKind.Asset)
-                builder.Append(assets[node.AssetId].State == ExistingAssetState.Reusable ? "  [库中已存在]" : "  [需要新建]");
+                builder.Append(seenAssets.Add(node.AssetId)
+                    ? (assets[node.AssetId].State == ExistingAssetState.Reusable ? "  [库中已存在]" : "  [需要新建]")
+                    : "  [同一 Asset 的另一实例]");
             if (node.Kind == ExportNodeKind.Project) builder.Append("  [导出 STEP/STL]");
             builder.AppendLine();
             var children = node.Children.ToList();
             for (var i = 0; i < children.Count; i++)
-                AppendPreview(builder, children[i], indent + (last ? "   " : "│  "), i == children.Count - 1, assets);
+                AppendPreview(builder, children[i], indent + (last ? "   " : "│  "), i == children.Count - 1, assets, seenAssets);
         }
 
         private static IEnumerable<ExportNode> Flatten(IEnumerable<ExportNode> roots)

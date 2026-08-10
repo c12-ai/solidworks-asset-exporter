@@ -19,9 +19,11 @@
 - Asset manifest、SHA-256、内容指纹、版本命中复用、同 ID 内容变化拒绝覆盖。
 - Asset 根模型和完整依赖 Pack and Go、直接关联根模型的 SLDDRW、全页 PDF。
 - Asset 与 Project 独立 staging，成功后目录级提交；既有版本不覆盖。
-- 分类预览和确认窗口；导出后恢复配置、显示状态、选择和 STEP/STL 全局设置。
+- 分类预览和确认窗口；导出模型文档当前活动配置及显示状态，不切换配置或显示状态；导出后恢复选择和 STEP/STL 全局设置。
 
-本仓库的核心层和 Add-in 代码路径已在无 SOLIDWORKS 环境下完成编译检查；核心自动测试已通过。由于当前开发机没有 SOLIDWORKS 和官方 Interop DLL，尚未在本机执行 2025/2026 的真实 COM 加载、STEP/STL、Pack and Go 和 PDF 现场测试。`InteropStubs.cs` 只用于这种隔离编译检查，生产构建不会包含它。
+核心层现有 15 项自动测试，Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建；该 stub 只用于编译检查，生产构建不会包含它。
+
+本项目已在 SOLIDWORKS Premium 2025 SP5.0 和官方 Interop 33.5.0.53 上完成生产构建、COM 安装与加载、命令打开、完全解析装配体分类预览，以及当前活动配置不切换的导出流程验证。最新的强类型 `SaveAs3` 修复已完成构建和安装；完整 STEP/STL、Pack and Go、SLDDRW/PDF 产物仍需完成最终现场验收。SOLIDWORKS 2026 尚未实机验证。
 
 ## 自定义属性
 
@@ -38,9 +40,9 @@ is_asset = true            # true / 1 / yes
 asset_version = 1          # 必填正整数
 ```
 
-属性可以位于文件级或引用配置级，但同一个名称不能同时出现在两处，即使值相同也会失败。Asset manifest 会把合并后的自定义属性保存为 JSON 键值对。
+属性可以位于文件级或模型文档当前活动配置级，但同一个名称不能同时出现在两处，即使值相同也会失败。Asset manifest 会把合并后的自定义属性保存为 JSON 键值对。
 
-Asset UUIDv5 的输入是文件名（含扩展名）、SOLIDWORKS 内部创建时间、引用配置、引用显示状态和文档类型。路径、`asset_version` 不参与 UUID，因此移动模型目录不会改变 UUID。`asset_id` 是 `<uuid>:<version>`，只出现在装配 XML；manifest 内只保存独立的 `uuid` 和 `version`。
+Asset UUIDv5 的输入是文件名（含扩展名）、SOLIDWORKS 内部创建时间、模型文档当前活动配置、当前显示状态和文档类型。路径、`asset_version` 不参与 UUID，因此移动模型目录不会改变 UUID。同一零件的多个装配实例保留各自 XML 节点和位姿，但共享同一个 `asset_id`，Asset 包只创建或复用一次。`asset_id` 是 `<uuid>:<version>`，只出现在装配 XML；manifest 内只保存独立的 `uuid` 和 `version`。
 
 ## 输出
 
@@ -148,7 +150,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
 9. 在隔离目录打开 Asset 的 Pack and Go 根源文件；确认 Project 没有源文件和图纸。
 10. 检查根模型直接图纸的 SLDDRW 和全页 PDF；依赖零件图纸不得被导出。
 11. 人工制造中途失败，确认 staging 被清理且既有版本目录未被覆盖。
-12. 导出后确认活动配置、显示状态、选择和 STEP/STL 系统选项恢复。
+12. 导出前后确认模型活动配置和显示状态未被切换，并确认选择和 STEP/STL 系统选项已恢复。
 
 镜像或带非单位缩放的组件变换不能无损表示成平移加四元数，因此插件会明确拒绝，而不是输出错误位姿。
 

@@ -32,10 +32,8 @@ namespace SolidWorks.Interop.sldworks
     {
         string Name2 { get; }
         int GetID(); int Visible { get; }
-        bool IsSuppressed(); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data);
+        bool IsSuppressed(); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
         object GetModelDoc2(); object GetChildren();
-        string ReferencedConfiguration { get; }
-        string ReferencedDisplayState2 { get; }
         MathTransform Transform2 { get; }
     }
 
@@ -43,11 +41,11 @@ namespace SolidWorks.Interop.sldworks
 
     public interface ModelDoc2
     {
-        new int GetType(); string GetPathName(); string GetTitle(); bool GetSaveFlag(); object GetConfigurationByName(string name);
+        int GetType(); string GetPathName(); string GetTitle(); bool GetSaveFlag(); string get_SummaryInfo(int fieldId);
         ConfigurationManager ConfigurationManager { get; }
         ModelDocExtension Extension { get; }
-        SelectionMgr SelectionManager { get; }
-        bool ShowConfiguration2(string name); void ClearSelection2(bool all);
+        object SelectionManager { get; }
+        void ClearSelection2(bool all);
     }
 
     public interface DrawingDoc : ModelDoc2 { object GetViews(); }
@@ -55,11 +53,13 @@ namespace SolidWorks.Interop.sldworks
     public interface ConfigurationManager { Configuration ActiveConfiguration { get; } }
     public interface Configuration
     {
-        string Name { get; } Component2 GetRootComponent3(bool resolve); object GetDisplayStates(); bool ApplyDisplayState(string name);
+        string Name { get; } Component2 GetRootComponent3(bool resolve); object GetDisplayStates();
     }
     public interface ModelDocExtension
     {
         PackAndGo GetPackAndGo(); object SavePackAndGo(PackAndGo value);
+        bool SaveAs3(string name, int version, int options, object exportData, object advancedSaveAsOptions,
+            ref int errors, ref int warnings);
     }
     public interface CustomPropertyManager
     {
@@ -94,7 +94,7 @@ namespace SolidWorks.Interop.sldworks
 namespace SolidWorks.Interop.swconst
 {
     public enum swComponentVisibilityState_e { swComponentVisible = 2 }
-    public enum swSummInfoField_e { swSumInfoCreateDate = 2 }
+    public enum swSummInfoField_e { swSumInfoCreateDate = 6 }
     public enum swDocumentTypes_e { swDocPART = 1, swDocASSEMBLY = 2, swDocDRAWING = 3 }
     public enum swUserPreferenceIntegerValue_e { swStepAP, swStepExportPreference, swExportStlUnits, swSTLQuality }
     public enum swUserPreferenceToggle_e { swStepExportAtomicSave, swSTLBinaryFormat, swSTLDontTranslateToPositive, swSTLComponentsIntoOneFile, swSTLShowInfoOnSave, swSTLPreview, swSTLCheckForInterference }
@@ -110,5 +110,6 @@ namespace SolidWorks.Interop.swconst
     public enum swOpenDocOptions_e { swOpenDocOptions_Silent = 1 }
     public enum swSearchFolderTypes_e { swDocumentType = 0 }
     public enum swRebuildOnActivation_e { swDontRebuildActiveDoc = 1 }
+    public enum swCreateCommandGroupErrors { swCreateCommandGroup_Failed = 0, swCreateCommandGroup_Success = 1, swCreateCommandGroup_Exceeds_ToolBarIDs = 2 }
     [Flags] public enum swCommandItemType_e { swMenuItem = 1, swToolbarItem = 2 }
 }

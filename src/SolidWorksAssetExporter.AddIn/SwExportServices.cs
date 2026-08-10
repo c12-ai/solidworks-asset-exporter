@@ -68,57 +68,7 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var value in _integers) try { _app.SetUserPreferenceIntegerValue(value.Key, value.Value); } catch (Exception ex) { failure = failure ?? ex; }
             foreach (var value in _toggles) try { _app.SetUserPreferenceToggle(value.Key, value.Value); } catch (Exception ex) { failure = failure ?? ex; }
             foreach (var value in _strings) try { _app.SetUserPreferenceStringValue(value.Key, value.Value); } catch (Exception ex) { failure = failure ?? ex; }
-            if (failure != null && throwOnFailure) throw new ValidationException("无法完整恢复 SOLIDWORKS 导出设置: " + failure.Message);
-        }
-    }
-
-    public sealed class SwModelStateScope : IDisposable
-    {
-        private readonly ModelDoc2 _document;
-        private readonly string _originalConfiguration;
-        private readonly string _originalDisplayState;
-
-        public SwModelStateScope(ModelDoc2 document, string targetConfiguration, string targetDisplayState)
-        {
-            _document = document;
-            _originalConfiguration = document.ConfigurationManager.ActiveConfiguration.Name;
-            _originalDisplayState = FirstDisplayState(document.ConfigurationManager.ActiveConfiguration);
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(targetConfiguration) && !document.ShowConfiguration2(targetConfiguration))
-                    throw new ValidationException("无法激活配置: " + targetConfiguration);
-                ApplyDisplayState(document.ConfigurationManager.ActiveConfiguration, targetDisplayState);
-            }
-            catch
-            {
-                if (!string.IsNullOrWhiteSpace(_originalConfiguration)) document.ShowConfiguration2(_originalConfiguration);
-                ApplyDisplayState(document.ConfigurationManager.ActiveConfiguration, _originalDisplayState);
-                throw;
-            }
-        }
-
-        public void Dispose()
-        {
-            if (!string.IsNullOrWhiteSpace(_originalConfiguration)) _document.ShowConfiguration2(_originalConfiguration);
-            ApplyDisplayState(_document.ConfigurationManager.ActiveConfiguration, _originalDisplayState);
-        }
-
-        private static string FirstDisplayState(Configuration configuration)
-        {
-            try
-            {
-                var root = configuration.GetRootComponent3(true);
-                if (root != null && !string.IsNullOrWhiteSpace(root.ReferencedDisplayState2)) return root.ReferencedDisplayState2;
-                var names = configuration.GetDisplayStates() as string[];
-                return names == null || names.Length == 0 ? string.Empty : names[0];
-            }
-            catch { return string.Empty; }
-        }
-
-        private static void ApplyDisplayState(Configuration configuration, string displayState)
-        {
-            if (configuration != null && !string.IsNullOrWhiteSpace(displayState) && !configuration.ApplyDisplayState(displayState))
-                throw new ValidationException("无法激活显示状态: " + displayState);
+            if (failure != null && throwOnFailure) throw new ValidationException("无法完整恢复 SOLIDWORKS 导出设置：" + failure.Message);
         }
     }
 
@@ -130,7 +80,7 @@ namespace SolidWorksAssetExporter.AddIn
         public SwSelectionScope(ModelDoc2 document)
         {
             _document = document;
-            var manager = document.SelectionManager;
+            var manager = (SelectionMgr)document.SelectionManager;
             var count = manager.GetSelectedObjectCount2(-1);
             for (var i = 1; i <= count; i++)
                 _selected.Add(new SelectedObject { Value = manager.GetSelectedObject6(i, -1), Mark = manager.GetSelectedObjectMark(i) });
@@ -144,7 +94,7 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 try
                 {
-                    dynamic data = _document.SelectionManager.CreateSelectData(); data.Mark = item.Mark;
+                    dynamic data = ((SelectionMgr)_document.SelectionManager).CreateSelectData(); data.Mark = item.Mark;
                     ((dynamic)item.Value).Select4(true, data);
                 }
                 catch { try { ((dynamic)item.Value).Select2(true, item.Mark); } catch { } }
@@ -163,7 +113,6 @@ namespace SolidWorksAssetExporter.AddIn
         {
             Directory.CreateDirectory(destinationDirectory);
             using (new SwActiveDocumentScope(_app, node.Document))
-            using (new SwModelStateScope(node.Document, node.Model.Configuration, node.Model.DisplayState))
             using (new SwSelectionScope(node.Document))
             {
                 SelectVisibleGeometry(node.Document);
@@ -180,7 +129,7 @@ namespace SolidWorksAssetExporter.AddIn
             var root = document.ConfigurationManager.ActiveConfiguration.GetRootComponent3(true);
             if (root == null) throw new ValidationException("活动子装配配置缺少根组件。");
             var selected = SelectVisibleLeaves(root);
-            if (selected == 0) throw new ValidationException("装配体没有可导出的可见、未抑制、非包络实体组件: " + document.GetTitle());
+            if (selected == 0) throw new ValidationException("装配体没有可导出的可见、未抑制、非包络实体组件：" + document.GetTitle());
         }
 
         private static int SelectVisibleLeaves(Component2 parent)
@@ -189,13 +138,13 @@ namespace SolidWorksAssetExporter.AddIn
             if (children == null || children.Length == 0)
             {
                 var model = parent.GetModelDoc2() as ModelDoc2;
-                if (model == null) throw new ValidationException("可见组件未解析或未加载: " + parent.Name2);
+                if (model == null) throw new ValidationException("可见组件未解析或未加载：" + parent.Name2);
                 if (model.GetType() == (int)swDocumentTypes_e.swDocPART)
                 {
-                    if (!parent.Select4(true, null)) throw new ValidationException("无法选择可见组件用于几何导出: " + parent.Name2);
+                    if (!parent.Select4(true, null, false)) throw new ValidationException("无法选择可见组件用于几何导出：" + parent.Name2);
                     return 1;
                 }
-                throw new ValidationException("可见子装配体没有可遍历组件，请先完全解析: " + parent.Name2);
+                throw new ValidationException("可见子装配体没有可遍历组件，请先完全解析：" + parent.Name2);
             }
             var count = 0;
             foreach (var value in children)
@@ -210,12 +159,11 @@ namespace SolidWorksAssetExporter.AddIn
         private static void Save(ModelDoc2 document, string path)
         {
             int errors = 0, warnings = 0;
-            dynamic extension = document.Extension;
-            var ok = (bool)extension.SaveAs3(path, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
+            var ok = document.Extension.SaveAs3(path, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
                 (int)swSaveAsOptions_e.swSaveAsOptions_Silent, null, null, ref errors, ref warnings);
             if (!ok || errors != 0 || !File.Exists(path))
                 throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                    "几何导出失败: {0}; errors={1}, warnings={2}", path, errors, warnings));
+                    "几何导出失败：{0}; errors={1}, warnings={2}", path, errors, warnings));
         }
     }
 
@@ -244,7 +192,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             int errors = 0;
             var document = _app.ActivateDoc3(title, false, (int)swRebuildOnActivation_e.swDontRebuildActiveDoc, ref errors) as ModelDoc2;
-            if (document == null || errors != 0) throw new ValidationException("无法无重建地激活模型文档: " + title + "; errors=" + errors);
+            if (document == null || errors != 0) throw new ValidationException("无法无重建地激活模型文档：" + title + "; errors=" + errors);
         }
     }
 
@@ -267,7 +215,7 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var file in files)
             {
                 var open = _app == null ? null : _app.GetOpenDocumentByName(file) as ModelDoc2;
-                if (open != null && open.GetSaveFlag()) throw new ValidationException("依赖模型存在未保存修改: " + file);
+                if (open != null && open.GetSaveFlag()) throw new ValidationException("依赖模型存在未保存修改：" + file);
             }
             return files.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -380,12 +328,12 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 var data = (ExportPdfData)_app.GetExportFileData((int)swExportDataFileType_e.swExportPdfData);
                 if (data == null || !data.SetSheets((int)swExportDataSheetsToExport_e.swExportData_ExportAllSheets, null))
-                    throw new ValidationException("无法设置 PDF 全页导出: " + drawingPath);
-                int errors = 0, warnings = 0; dynamic extension = document.Extension;
-                var ok = (bool)extension.SaveAs3(destination, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
+                    throw new ValidationException("无法设置 PDF 全页导出：" + drawingPath);
+                int errors = 0, warnings = 0;
+                var ok = document.Extension.SaveAs3(destination, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
                     (int)swSaveAsOptions_e.swSaveAsOptions_Silent, data, null, ref errors, ref warnings);
                 if (!ok || errors != 0 || !File.Exists(destination))
-                    throw new ValidationException("图纸 PDF 导出失败: " + drawingPath);
+                    throw new ValidationException("图纸 PDF 导出失败：" + drawingPath);
             }
             finally { if (openedHere) _app.CloseDoc(document.GetTitle()); }
         }
@@ -395,17 +343,17 @@ namespace SolidWorksAssetExporter.AddIn
             var existing = _app.GetOpenDocumentByName(path) as ModelDoc2;
             if (existing != null)
             {
-                if (existing.GetSaveFlag()) throw new ValidationException("图纸存在未保存修改: " + path);
+                if (existing.GetSaveFlag()) throw new ValidationException("图纸存在未保存修改：" + path);
                 openedHere = false; return existing;
             }
             int errors = 0, warnings = 0;
             var document = _app.OpenDoc6(path, (int)swDocumentTypes_e.swDocDRAWING,
                 (int)swOpenDocOptions_e.swOpenDocOptions_Silent, string.Empty, ref errors, ref warnings) as ModelDoc2;
-            if (document == null || errors != 0) throw new ValidationException("无法打开图纸: " + path);
+            if (document == null || errors != 0) throw new ValidationException("无法打开图纸：" + path);
             if (document.GetSaveFlag())
             {
                 _app.CloseDoc(document.GetTitle());
-                throw new ValidationException("图纸打开后存在未保存修改或需要重建: " + path);
+                throw new ValidationException("图纸打开后存在未保存修改或需要重建：" + path);
             }
             openedHere = true; return document;
         }
