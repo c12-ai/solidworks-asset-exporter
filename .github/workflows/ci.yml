@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: microsoft/setup-msbuild@v3
+      - name: Run core tests
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-core.ps1 -Configuration Release
+      - name: Build production add-in with bundled Interop assemblies
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuration Release
+      - name: Create validation install package
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Version "0.0.${{ github.run_number }}-ci.${{ github.run_attempt }}"
+      - name: Upload validation install package
+        uses: actions/upload-artifact@v7
+        with:
+          name: SolidWorksAssetExporter-package-${{ github.run_number }}
+          path: artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 7

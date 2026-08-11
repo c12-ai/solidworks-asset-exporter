@@ -1,10 +1,12 @@
 param(
-    [Parameter(Mandatory = $true)][string]$SolidWorksInteropDir,
+    [string]$SolidWorksInteropDir,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release'
 )
 
 . (Join-Path $PSScriptRoot 'Common.ps1')
 $repoRoot = Get-RepositoryRoot
+$defaultInterop = Join-Path $repoRoot 'third_party\solidworks'
+if ([string]::IsNullOrWhiteSpace($SolidWorksInteropDir)) { $SolidWorksInteropDir = $defaultInterop }
 $msbuild = Get-MSBuildPath
 $interop = (Resolve-Path -LiteralPath $SolidWorksInteropDir).Path
 

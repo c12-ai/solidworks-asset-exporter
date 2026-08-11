@@ -103,15 +103,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-core.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-addin-contract.ps1
 ```
 
-生产构建必须使用目标机安装目录中的三个官方 Interop DLL：
+生产构建默认使用仓库 `third_party\solidworks` 中的三个官方 Interop DLL，因此构建机无需安装 SOLIDWORKS：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 `
-  -SolidWorksInteropDir 'C:\path\to\SOLIDWORKS\api\redist' `
-  -Configuration Release
+powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuration Release
 ```
 
-目录必须包含：
+`third_party\solidworks` 必须包含：
 
 - `SolidWorks.Interop.sldworks.dll`
 - `SolidWorks.Interop.swconst.dll`
@@ -119,18 +117,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 `
 
 ## 安装与卸载
 
-关闭 SOLIDWORKS，在管理员 PowerShell 中执行：
+关闭 SOLIDWORKS，右键安装脚本并选择“以管理员身份运行”：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```text
+.\scripts\install.cmd
 ```
 
 重新启动 SOLIDWORKS 后，从 Add-in 菜单启用 `Asset / Project 混合导出`，再执行 `Asset / Project 导出` 命令。首次使用先设置 Asset 库、Project 根目录、XML mesh 格式和额外图纸搜索目录，然后点击“分类预览”。
 
-卸载前关闭 SOLIDWORKS，再在管理员 PowerShell 中执行：
+卸载前关闭 SOLIDWORKS，右键卸载脚本并选择“以管理员身份运行”：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
+```text
+.\scripts\uninstall.cmd
 ```
 
 默认安装位置是 `%ProgramData%\SolidWorksAssetExporter`。设置保存在当前用户 `%APPDATA%\SolidWorksAssetExporter\settings.json`，卸载脚本不会删除用户设置或任何导出数据。
