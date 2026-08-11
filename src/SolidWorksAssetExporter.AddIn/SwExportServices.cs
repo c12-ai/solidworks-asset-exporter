@@ -201,6 +201,19 @@ namespace SolidWorksAssetExporter.AddIn
         private readonly SldWorks _app;
         public SwSourcePackager(SldWorks app) { _app = app; }
 
+        public IList<string> AssetModelFiles(SwCadNode node)
+        {
+            var files = AssetSourcePlanner.CollectModelFiles(node).Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var file in files)
+            {
+                if (!File.Exists(file)) throw new ValidationException("Asset 源模型文件不存在：" + file);
+                var open = _app.GetOpenDocumentByName(file) as ModelDoc2;
+                if (open != null && open.GetSaveFlag()) throw new ValidationException("Asset 层级模型存在未保存修改：" + file);
+            }
+            return files;
+        }
+
         public IList<string> DependencyFiles(ModelDoc2 document)
         {
             var packAndGo = document.Extension.GetPackAndGo();
@@ -227,23 +240,97 @@ namespace SolidWorksAssetExporter.AddIn
             return FileHash.Sha256Text(Canonical.Join(IdentityService.ModelSeed(node.Model), string.Join("\n", entries)));
         }
 
-        public void Pack(ModelDoc2 document, string destinationDirectory)
+        public void PackAsset(SwCadNode node, IEnumerable<string> modelFiles, string destinationDirectory)
         {
             Directory.CreateDirectory(destinationDirectory);
+            var files = (modelFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (files.Count == 0) throw new ValidationException("Asset 没有可打包的源模型文件。");
+            if (node.Model.DocumentKind == DocumentKind.Part)
+            {
+                if (files.Count != 1) throw new ValidationException("零件 Asset 只能包含自身源模型。");
+                File.Copy(files[0], Path.Combine(destinationDirectory, Path.GetFileName(files[0])), false);
+                return;
+            }
+            if (node.Model.DocumentKind != DocumentKind.Assembly)
+                throw new ValidationException("不支持的 Asset 模型类型：" + node.Model.DocumentKind);
+
+            PackAssembly(node.Document, files, destinationDirectory);
+        }
+
+        private static void PackAssembly(ModelDoc2 document, IList<string> allowedFiles, string destinationDirectory)
+        {
             var packAndGo = document.Extension.GetPackAndGo();
             packAndGo.IncludeDrawings = false;
-            packAndGo.IncludeSuppressed = true;
+            packAndGo.IncludeSuppressed = false;
             packAndGo.IncludeToolboxComponents = true;
             packAndGo.IncludeSimulationResults = false;
-            packAndGo.FlattenToSingleFolder = false;
-#pragma warning disable 618
-            if (!packAndGo.SetSaveToName(true, destinationDirectory + Path.DirectorySeparatorChar))
-#pragma warning restore 618
-                throw new ValidationException("Pack and Go 无法设置 Asset 源文件目录。");
-            var statusObject = document.Extension.SavePackAndGo(packAndGo);
-            var statuses = statusObject as int[];
-            if (statuses == null || statuses.Any(value => value != (int)swPackAndGoSaveStatus_e.swPackAndGoSaveStatus_Succeed))
-                throw new ValidationException("Pack and Go 未能完整保存 Asset 根模型及依赖。");
+            packAndGo.FlattenToSingleFolder = true;
+
+            object namesObject;
+            if (!packAndGo.GetDocumentNames(out namesObject)) throw new ValidationException("Pack and Go 无法读取装配体依赖。");
+            var originalNames = ToStrings(namesObject);
+            var allowed = new HashSet<string>(allowedFiles.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
+            var packaged = new HashSet<string>(originalNames.Where(path => !string.IsNullOrWhiteSpace(path)).Select(Path.GetFullPath),
+                StringComparer.OrdinalIgnoreCase);
+            var missing = allowed.Where(path => !packaged.Contains(path)).ToList();
+            if (missing.Count != 0)
+                throw new ValidationException("Pack and Go 未发现 Asset 层级模型：" + string.Join("; ", missing));
+
+            var destinations = BuildDestinationNames(allowedFiles, destinationDirectory);
+            var saveNames = new string[originalNames.Count];
+            for (var i = 0; i < originalNames.Count; i++)
+            {
+                string destination;
+                saveNames[i] = destinations.TryGetValue(Path.GetFullPath(originalNames[i]), out destination) ? destination : string.Empty;
+            }
+            if (!packAndGo.SetDocumentSaveToNames(saveNames))
+                throw new ValidationException("Pack and Go 无法设置 Asset 层级文件清单。");
+            var statuses = document.Extension.SavePackAndGo(packAndGo) as int[];
+            if (statuses == null || statuses.Length != originalNames.Count)
+                throw new ValidationException("Pack and Go 未返回完整保存状态。");
+            for (var i = 0; i < statuses.Length; i++)
+                if (allowed.Contains(Path.GetFullPath(originalNames[i])) &&
+                    statuses[i] != (int)swPackAndGoSaveStatus_e.swPackAndGoSaveStatus_Succeed)
+                    throw new ValidationException("Pack and Go 未能保存 Asset 层级模型：" + originalNames[i]);
+            var expectedOutputs = new HashSet<string>(destinations.Values.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
+            var actualOutputs = new HashSet<string>(Directory.EnumerateFiles(destinationDirectory, "*", SearchOption.AllDirectories)
+                .Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
+            var missingOutputs = expectedOutputs.Where(path => !actualOutputs.Contains(path)).ToList();
+            if (missingOutputs.Count != 0)
+                throw new ValidationException("Pack and Go 缺少输出文件：" + string.Join("; ", missingOutputs));
+            var unexpectedOutputs = actualOutputs.Where(path => !expectedOutputs.Contains(path)).ToList();
+            if (unexpectedOutputs.Count != 0)
+                throw new ValidationException("Pack and Go 输出了 Asset 层级外文件：" + string.Join("; ", unexpectedOutputs));
+        }
+
+        private static IList<string> ToStrings(object values)
+        {
+            var array = values as object[];
+            if (array != null) return array.Select(value => Convert.ToString(value, CultureInfo.InvariantCulture)).ToList();
+            var strings = values as string[];
+            return strings == null ? new List<string>() : strings.ToList();
+        }
+
+        private static IDictionary<string, string> BuildDestinationNames(IEnumerable<string> files, string destinationDirectory)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var source in files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var fileName = Path.GetFileName(source);
+                if (!usedNames.Add(fileName))
+                {
+                    var stem = Path.GetFileNameWithoutExtension(fileName);
+                    var extension = Path.GetExtension(fileName);
+                    var suffix = FileHash.Sha256(source).Substring(0, 8);
+                    fileName = stem + "_" + suffix + extension;
+                    var counter = 2;
+                    while (!usedNames.Add(fileName)) fileName = stem + "_" + suffix + "_" + (counter++).ToString(CultureInfo.InvariantCulture) + extension;
+                }
+                result.Add(source, Path.Combine(destinationDirectory, fileName));
+            }
+            return result;
         }
     }
 
@@ -252,12 +339,10 @@ namespace SolidWorksAssetExporter.AddIn
         private readonly SldWorks _app;
         public SwDrawingExporter(SldWorks app) { _app = app; }
 
-        public IList<string> ExportDirectDrawings(SwCadNode asset, IEnumerable<string> extraDirectories,
-            string sourceDestination, string pdfDestination)
+        public IList<string> ExportDrawings(IEnumerable<string> drawingFiles, string sourceDestination, string pdfDestination)
         {
-            var candidates = FindDirectDrawingFiles(asset, extraDirectories);
             var exported = new List<string>();
-            foreach (var drawingPath in candidates)
+            foreach (var drawingPath in (drawingFiles ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 Directory.CreateDirectory(sourceDestination); Directory.CreateDirectory(pdfDestination);
                 var sourceName = UniquePath(sourceDestination, Path.GetFileName(drawingPath));
@@ -269,19 +354,35 @@ namespace SolidWorksAssetExporter.AddIn
             return exported;
         }
 
-        public IList<string> FindDirectDrawingFiles(SwCadNode asset, IEnumerable<string> extraDirectories)
+        public IList<string> FindDirectDrawingFiles(IEnumerable<string> modelFiles, IEnumerable<string> extraDirectories)
         {
-            return FindCandidates(asset.Model.FullPath, extraDirectories)
-                .Where(path => DirectlyReferences(path, asset.Model.FullPath))
+            var models = new HashSet<string>((modelFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
+            return FindCandidates(models, extraDirectories).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(path => DirectlyReferencesAny(path, models))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private IEnumerable<string> FindCandidates(string modelPath, IEnumerable<string> extraDirectories)
+        private IEnumerable<string> FindCandidates(IEnumerable<string> modelPaths, IEnumerable<string> extraDirectories)
         {
             var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var modelDirectory = Path.GetDirectoryName(modelPath); if (Directory.Exists(modelDirectory)) directories.Add(modelDirectory);
-            foreach (var value in extraDirectories ?? Enumerable.Empty<string>()) if (Directory.Exists(value)) directories.Add(Path.GetFullPath(value));
+            var requiredDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var modelPath in modelPaths)
+            {
+                var modelDirectory = Path.GetDirectoryName(modelPath);
+                if (string.IsNullOrWhiteSpace(modelDirectory) || !Directory.Exists(modelDirectory))
+                    throw new ValidationException("Asset 模型目录不存在：" + modelDirectory);
+                var fullDirectory = Path.GetFullPath(modelDirectory);
+                directories.Add(fullDirectory); requiredDirectories.Add(fullDirectory);
+            }
+            foreach (var value in extraDirectories ?? Enumerable.Empty<string>())
+            {
+                string fullDirectory;
+                try { fullDirectory = Path.GetFullPath(value); }
+                catch (Exception ex) { throw new ValidationException("额外图纸搜索目录无效：" + value + "；" + ex.Message); }
+                if (!Directory.Exists(fullDirectory)) throw new ValidationException("额外图纸搜索目录不存在：" + fullDirectory);
+                directories.Add(fullDirectory); requiredDirectories.Add(fullDirectory);
+            }
             try
             {
                 var search = _app.GetSearchFolders((int)swSearchFolderTypes_e.swDocumentType);
@@ -292,13 +393,18 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var directory in directories)
             {
                 IEnumerable<string> files;
-                try { files = Directory.EnumerateFiles(directory, "*.SLDDRW", SearchOption.AllDirectories); }
-                catch { continue; }
+                try { files = Directory.GetFiles(directory, "*.SLDDRW", SearchOption.AllDirectories); }
+                catch (Exception ex)
+                {
+                    if (requiredDirectories.Contains(directory))
+                        throw new ValidationException("无法搜索图纸目录：" + directory + "；" + ex.Message);
+                    continue;
+                }
                 foreach (var file in files) yield return file;
             }
         }
 
-        private bool DirectlyReferences(string drawingPath, string modelPath)
+        private bool DirectlyReferencesAny(string drawingPath, ISet<string> modelPaths)
         {
             bool openedHere; var document = OpenDrawing(drawingPath, out openedHere);
             try
@@ -312,8 +418,7 @@ namespace SolidWorksAssetExporter.AddIn
                     foreach (var item in views)
                     {
                         var view = item as View; if (view == null) continue;
-                        var reference = view.GetReferencedModelName();
-                        if (SameModelReference(reference, drawingPath, modelPath)) return true;
+                        if (ViewReferencesAnyModel(view, drawingPath, modelPaths)) return true;
                     }
                 }
                 return false;
@@ -358,15 +463,39 @@ namespace SolidWorksAssetExporter.AddIn
             openedHere = true; return document;
         }
 
-        private static bool SameModelReference(string reference, string drawingPath, string modelPath)
+        private static string ResolveModelReference(string reference, string drawingPath)
         {
-            if (string.IsNullOrWhiteSpace(reference)) return false;
+            if (string.IsNullOrWhiteSpace(reference)) return null;
             try
             {
-                var resolved = Path.IsPathRooted(reference) ? Path.GetFullPath(reference) : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(drawingPath), reference));
-                return string.Equals(resolved, Path.GetFullPath(modelPath), StringComparison.OrdinalIgnoreCase);
+                return Path.IsPathRooted(reference) ? Path.GetFullPath(reference) : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(drawingPath), reference));
             }
-            catch { return false; }
+            catch { return null; }
+        }
+
+        private static bool ViewReferencesAnyModel(View view, string drawingPath, ISet<string> modelPaths)
+        {
+            var current = view;
+            for (var depth = 0; current != null && depth < 32; depth++)
+            {
+                try
+                {
+                    var referenced = current.ReferencedDocument;
+                    var path = referenced == null ? null : referenced.GetPathName();
+                    if (!string.IsNullOrWhiteSpace(path) && modelPaths.Contains(Path.GetFullPath(path))) return true;
+                }
+                catch { }
+                try
+                {
+                    var name = current.GetReferencedModelName();
+                    var resolved = ResolveModelReference(name, drawingPath);
+                    if (resolved != null && modelPaths.Contains(resolved)) return true;
+                }
+                catch { }
+                try { current = current.GetBaseView() as View; }
+                catch { current = null; }
+            }
+            return false;
         }
 
         private static string UniquePath(string directory, string fileName)

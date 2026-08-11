@@ -29,6 +29,9 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Manifest validates hashes and conflicts", ManifestValidation);
             Run("Project report validates immutable package", ProjectReportValidation);
             Run("Directory transaction is immutable", DirectoryTransactionIsImmutable);
+            Run("Part Asset source stays single-file", PartAssetSourceStaysSingleFile);
+            Run("Assembly Asset source stays inside boundary", AssemblyAssetSourceStaysInsideBoundary);
+            Run("Asset source rejects mismatched extension", AssetSourceRejectsMismatchedExtension);
 
             Console.WriteLine(_failures == 0 ? "ALL TESTS PASSED" : _failures + " TEST(S) FAILED");
             return _failures == 0 ? 0 : 1;
@@ -264,6 +267,49 @@ namespace SolidWorksAssetExporter.Core.Tests
                     Throws<ValidationException>(() => transaction.Commit());
             }
             finally { Directory.Delete(temp, true); }
+        }
+
+        private static void PartAssetSourceStaysSingleFile()
+        {
+            var part = Node("asset-part", false, false);
+            part.Model.DocumentKind = DocumentKind.Part;
+            part.Model.FullPath = "C:\\models\\asset-part.SLDPRT";
+            part.ThrowOnChildren = true;
+            var files = AssetSourcePlanner.CollectModelFiles(part);
+            Equal(1, files.Count);
+            Equal(part.Model.FullPath, files[0]);
+            Equal(0, part.GetChildrenCalls);
+        }
+
+        private static void AssemblyAssetSourceStaysInsideBoundary()
+        {
+            var parent = Node("parent", false, true);
+            var asset = Node("asset-assembly", false, true);
+            var nested = Node("nested-assembly", false, true);
+            var part = Node("nested-part", false, false); part.Model.DocumentKind = DocumentKind.Part; part.Model.FullPath = "C:\\models\\nested-part.SLDPRT";
+            var hidden = Node("hidden-part", false, false); hidden.Model.DocumentKind = DocumentKind.Part; hidden.Model.FullPath = "C:\\models\\hidden-part.SLDPRT"; hidden.IsVisibleValue = false;
+            var suppressed = Node("suppressed-part", false, false); suppressed.Model.DocumentKind = DocumentKind.Part; suppressed.Model.FullPath = "C:\\models\\suppressed-part.SLDPRT"; suppressed.IsSuppressedValue = true; suppressed.ThrowOnChildren = true;
+            var outside = Node("outside-part", false, false); outside.Model.DocumentKind = DocumentKind.Part; outside.Model.FullPath = "C:\\models\\outside-part.SLDPRT";
+            nested.Add(part); asset.Add(nested, hidden, suppressed); parent.Add(asset, outside);
+
+            var files = AssetSourcePlanner.CollectModelFiles(asset);
+            Equal(4, files.Count);
+            True(files.Contains(asset.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            True(files.Contains(nested.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            True(files.Contains(part.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            True(files.Contains(hidden.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            True(!files.Contains(suppressed.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            True(!files.Contains(parent.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            True(!files.Contains(outside.Model.FullPath, StringComparer.OrdinalIgnoreCase));
+            Equal(0, suppressed.GetChildrenCalls);
+        }
+
+        private static void AssetSourceRejectsMismatchedExtension()
+        {
+            var part = Node("asset-part", false, false);
+            part.Model.DocumentKind = DocumentKind.Part;
+            part.Model.FullPath = "C:\\models\\asset-part.SLDASM";
+            Throws<ValidationException>(() => AssetSourcePlanner.CollectModelFiles(part));
         }
 
         private static FakeNode Root()

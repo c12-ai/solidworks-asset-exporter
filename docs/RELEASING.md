@@ -6,10 +6,10 @@
 
 ```powershell
 .\scripts\build-addin.ps1 -Configuration Release
-.\scripts\new-release-package.ps1 -Version v1.0.0
+.\scripts\new-release-package.ps1 -Version v1.0.1
 ```
 
-生成的 `artifacts\SolidWorksAssetExporter-v1.0.0.zip` 包含插件 DLL、SOLIDWORKS Interop DLL 与 CMD 安装、卸载脚本。
+生成的 `artifacts\SolidWorksAssetExporter-v1.0.1.zip` 包含插件 DLL、SOLIDWORKS Interop DLL 与 CMD 安装、卸载脚本。
 
 ## 在目标主机安装
 
@@ -24,8 +24,8 @@
 推送格式为 `v*` 的 tag 后，GitHub 托管的 Windows Runner 会自动执行生产构建、创建 ZIP 并发布 GitHub Release：
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 该流程不需要自托管 Runner，也不需要配置 `SOLIDWORKS_INTEROP_DIR`。

@@ -49,7 +49,11 @@ namespace SolidWorks.Interop.sldworks
     }
 
     public interface DrawingDoc : ModelDoc2 { object GetViews(); }
-    public interface View { string GetReferencedModelName(); }
+    public interface View
+    {
+        ModelDoc2 ReferencedDocument { get; }
+        string GetReferencedModelName(); object GetBaseView();
+    }
     public interface ConfigurationManager { Configuration ActiveConfiguration { get; } }
     public interface Configuration
     {
@@ -76,7 +80,7 @@ namespace SolidWorks.Interop.sldworks
         bool IncludeDrawings { get; set; } bool IncludeSuppressed { get; set; }
         bool IncludeToolboxComponents { get; set; } bool IncludeSimulationResults { get; set; }
         bool FlattenToSingleFolder { get; set; }
-        bool GetDocumentNames(out object names); bool SetSaveToName(bool value, string path);
+        bool GetDocumentNames(out object names); bool SetDocumentSaveToNames(object names); bool SetSaveToName(bool value, string path);
     }
     public interface CommandManager
     {

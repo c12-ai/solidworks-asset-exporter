@@ -29,6 +29,7 @@ namespace SolidWorksAssetExporter.AddIn
         public string Fingerprint { get; set; }
         public int Version { get; set; }
         public ExistingAssetState State { get; set; }
+        public IList<string> ModelFiles { get; set; }
         public IList<string> Drawings { get; set; }
     }
 
@@ -101,14 +102,19 @@ namespace SolidWorksAssetExporter.AddIn
 
         private AssetInspection InspectAsset(SwCadNode source, ExportNode node, ExporterSettings settings)
         {
-            var drawings = _drawings.FindDirectDrawingFiles(source, settings.DrawingSearchDirectories);
-            var modelFingerprint = _packager.ContentFingerprint(source);
-            var drawingEntries = drawings.Select(path => Canonical.Join(Path.GetFileName(path), FileHash.Sha256(path)));
+            var modelFiles = _packager.AssetModelFiles(source);
+            var drawings = _drawings.FindDirectDrawingFiles(modelFiles, settings.DrawingSearchDirectories);
+            var modelEntries = modelFiles.Select(path => Canonical.Join(Path.GetFileName(path),
+                new FileInfo(path).Length.ToString(CultureInfo.InvariantCulture), FileHash.Sha256(path)))
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
+            var modelFingerprint = FileHash.Sha256Text(Canonical.Join(IdentityService.ModelSeed(source.Model), string.Join("\n", modelEntries)));
+            var drawingEntries = drawings.Select(path => Canonical.Join(Path.GetFileName(path), FileHash.Sha256(path)))
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
             var fingerprint = FileHash.Sha256Text(Canonical.Join(modelFingerprint, string.Join("\n", drawingEntries)));
             var version = int.Parse(node.AssetId.Substring(node.AssetId.LastIndexOf(':') + 1), CultureInfo.InvariantCulture);
             var directory = AssetVersionDirectory(settings, node.GeometryUuid, version);
             var state = AssetManifestValidator.Inspect(directory, node.GeometryUuid, version, fingerprint);
-            return new AssetInspection { Node = source, Fingerprint = fingerprint, Version = version, State = state, Drawings = drawings };
+            return new AssetInspection { Node = source, Fingerprint = fingerprint, Version = version, State = state, ModelFiles = modelFiles, Drawings = drawings };
         }
 
         private void ExportAssets(AnalysisResult analysis, ExporterSettings settings, ExportCompletion completion)
@@ -127,8 +133,8 @@ namespace SolidWorksAssetExporter.AddIn
                 using (var transaction = new DirectoryTransaction(destination))
                 {
                     _geometry.ExportBoth(inspection.Node, Path.Combine(transaction.StagingDirectory, "geometry"));
-                    _packager.Pack(inspection.Node.Document, Path.Combine(transaction.StagingDirectory, "source", "models"));
-                    _drawings.ExportDirectDrawings(inspection.Node, settings.DrawingSearchDirectories,
+                    _packager.PackAsset(inspection.Node, inspection.ModelFiles, Path.Combine(transaction.StagingDirectory, "source", "models"));
+                    _drawings.ExportDrawings(inspection.Drawings,
                         Path.Combine(transaction.StagingDirectory, "drawings", "source"),
                         Path.Combine(transaction.StagingDirectory, "drawings", "pdf"));
                     var relativeFiles = Directory.EnumerateFiles(transaction.StagingDirectory, "*", SearchOption.AllDirectories)

@@ -8,20 +8,23 @@
 
 这解决了“一次性定制件不是 Asset、但后续装配重建仍需要数模”的问题：它会作为最大无 Asset 子树的 `Project` 单元进入当前项目目录，不污染全局 Asset 库。
 
+当前发布版本为 `v1.0.1`。
+
 ## 当前实现范围
 
 - 两阶段分类和最大无 Asset 子树折叠。
-- 隐藏、抑制、包络组件过滤。
-- Asset 边界短路；边界以下只允许 Pack and Go 收集依赖，不再读取 Asset 语义、图纸或生成子节点。
+- 分类扫描会过滤隐藏、抑制、包络组件；Asset 源文件收集只排除抑制组件，并保留层级内隐藏或包络模型的源文件。
+- Asset 分类边界保持短路；源文件收集只从该 Asset 根节点向下遍历活动层级，不读取子节点的 Asset 语义，也不会生成子节点。
 - UUIDv5、版本规则、同名属性冲突、已保存/无未保存修改校验。
 - STEP AP214 和二进制 Fine STL 双格式导出；模型文档本地原点作为几何原点。
 - XML 父子相对位姿、米、`qx/qy/qz/qw`、Asset ID 或 Project 相对 mesh 路径。
 - Asset manifest、SHA-256、内容指纹、版本命中复用、同 ID 内容变化拒绝覆盖。
-- Asset 根模型和完整依赖 Pack and Go、直接关联根模型的 SLDDRW、全页 PDF。
+- 零件 Asset 只打包自身 SLDPRT；装配体 Asset 只打包根 SLDASM 及其层级内未抑制的子装配体/零件，不包含父装配体、同级分支或层级外依赖。
+- 为上述每个 SLDASM/SLDPRT 收集直接关联的 SLDDRW，并导出对应源图纸和全页 PDF。
 - Asset 与 Project 独立 staging，成功后目录级提交；既有版本不覆盖。
 - 分类预览和确认窗口；导出模型文档当前活动配置及显示状态，不切换配置或显示状态；导出后恢复选择和 STEP/STL 全局设置。
 
-核心层现有 15 项自动测试，Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建；该 stub 只用于编译检查，生产构建不会包含它。
+核心层现有 18 项自动测试，Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建；该 stub 只用于编译检查，生产构建不会包含它。
 
 本项目已在 SOLIDWORKS Premium 2025 SP5.0 和官方 Interop 33.5.0.53 上完成生产构建、COM 安装与加载、命令打开、完全解析装配体分类预览，以及当前活动配置不切换的导出流程验证。最新的强类型 `SaveAs3` 修复已完成构建和安装；完整 STEP/STL、Pack and Go、SLDDRW/PDF 产物仍需完成最终现场验收。SOLIDWORKS 2026 尚未实机验证。
 
@@ -41,6 +44,8 @@ asset_version = 1          # 必填正整数
 ```
 
 属性可以位于文件级或模型文档当前活动配置级，但同一个名称不能同时出现在两处，即使值相同也会失败。Asset manifest 会把合并后的自定义属性保存为 JSON 键值对。
+
+同一 `uuid + asset_version` 的源模型及图纸内容完全一致时，插件会校验现有文件并直接复用旧 Asset；如果内容已经变化，则拒绝用同一个版本号覆盖，必须提升 `asset_version`。当前不维护独立数据库，Asset 地址由资产库根目录、UUID 和版本确定，每个版本目录中的 manifest 是该 Asset 的文件与哈希记录。
 
 Asset UUIDv5 的输入是文件名（含扩展名）、SOLIDWORKS 内部创建时间、模型文档当前活动配置、当前显示状态和文档类型。路径、`asset_version` 不参与 UUID，因此移动模型目录不会改变 UUID。同一零件的多个装配实例保留各自 XML 节点和位姿，但共享同一个 `asset_id`，Asset 包只创建或复用一次。`asset_id` 是 `<uuid>:<version>`，只出现在装配 XML；manifest 内只保存独立的 `uuid` 和 `version`。
 
@@ -117,7 +122,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuratio
 
 ## 安装与卸载
 
-关闭 SOLIDWORKS，右键安装脚本并选择“以管理员身份运行”：
+从 GitHub Releases 下载 `SolidWorksAssetExporter-v1.0.1.zip` 并完整解压。关闭 SOLIDWORKS，右键解压目录中的 `Install.cmd`，选择“以管理员身份运行”。如果从源码目录安装，则运行：
 
 ```text
 .\scripts\install.cmd
@@ -125,7 +130,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuratio
 
 重新启动 SOLIDWORKS 后，从 Add-in 菜单启用 `Asset / Project 混合导出`，再执行 `Asset / Project 导出` 命令。首次使用先设置 Asset 库、Project 根目录、XML mesh 格式和额外图纸搜索目录，然后点击“分类预览”。
 
-卸载前关闭 SOLIDWORKS，右键卸载脚本并选择“以管理员身份运行”：
+卸载前关闭 SOLIDWORKS，右键发布包中的 `Uninstall.cmd` 并选择“以管理员身份运行”。如果从源码目录卸载，则运行：
 
 ```text
 .\scripts\uninstall.cmd
@@ -145,8 +150,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuratio
 6. 复用同一 Asset 版本；修改源模型但不提升版本时必须拒绝。
 7. Project STEP/STL 均存在；切换格式只改变 XML 的 mesh 引用。
 8. 在两个导出模型中检查原点；用 XML 位姿重建装配并与 SOLIDWORKS 比较。
-9. 在隔离目录打开 Asset 的 Pack and Go 根源文件；确认 Project 没有源文件和图纸。
-10. 检查根模型直接图纸的 SLDDRW 和全页 PDF；依赖零件图纸不得被导出。
+9. 零件 Asset 的 `source/models` 只包含自身 SLDPRT；装配体 Asset 只包含根及向下层级内的 SLDASM/SLDPRT，且能在隔离目录打开；确认父装配体、同级分支和 Project 文件均未混入。
+10. 检查 Asset 根模型及层级内每个子装配体、零件直接关联的 SLDDRW 和全页 PDF；无关图纸不得被导出。
 11. 人工制造中途失败，确认 staging 被清理且既有版本目录未被覆盖。
 12. 导出前后确认模型活动配置和显示状态未被切换，并确认选择和 STEP/STL 系统选项已恢复。
 
@@ -162,5 +167,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuratio
 - [STL 导出选项](https://help.solidworks.com/2026/English/api/swconst/FileSaveAsSTLOptions.htm)
 - [Pack and Go](https://help.solidworks.com/2026/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IPackAndGo.html)
 - [Pack and Go 属性](https://help.solidworks.com/2026/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IPackAndGo_properties.html)
+- [SetDocumentSaveToNames 文件筛选](https://help.solidworks.com/2026/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IPackAndGo~SetDocumentSaveToNames.html)
 - [PDF SetSheets](https://help.solidworks.com/2026/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IExportPdfData~SetSheets.html)
 - [Referenced Documents 搜索目录](https://help.solidworks.com/2023/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISldWorks~GetSearchFolders.html)

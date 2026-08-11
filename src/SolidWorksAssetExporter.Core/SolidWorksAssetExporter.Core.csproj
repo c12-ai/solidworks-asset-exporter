@@ -30,6 +30,7 @@
     <Reference Include="System.Xml.Linq" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AssetSources.cs" />
     <Compile Include="Domain.cs" />
     <Compile Include="Files.cs" />
     <Compile Include="IdentityAndProperties.cs" />
