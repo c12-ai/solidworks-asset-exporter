@@ -20,6 +20,7 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
@@ -33,6 +34,12 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\InteropStubs.cs">
+      <Link>AddIn\InteropStubs.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\SwCadNode.cs">
+      <Link>AddIn\SwCadNode.cs</Link>
+    </Compile>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

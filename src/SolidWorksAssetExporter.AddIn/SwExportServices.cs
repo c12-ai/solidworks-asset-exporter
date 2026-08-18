@@ -150,7 +150,7 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var value in children)
             {
                 var child = value as Component2;
-                if (child == null || child.IsSuppressed() || child.IsEnvelope() || child.IsHidden(false)) continue;
+                if (child == null || SwComponentState.IsSuppressed(child) || child.IsEnvelope() || !SwComponentState.IsVisible(child)) continue;
                 count += SelectVisibleLeaves(child);
             }
             return count;

@@ -32,7 +32,7 @@ namespace SolidWorks.Interop.sldworks
     {
         string Name2 { get; }
         int GetID(); int Visible { get; }
-        bool IsSuppressed(); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
+        bool IsSuppressed(); int GetSuppression2(); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
         object GetModelDoc2(); object GetChildren();
         MathTransform Transform2 { get; }
     }
@@ -49,6 +49,10 @@ namespace SolidWorks.Interop.sldworks
     }
 
     public interface DrawingDoc : ModelDoc2 { object GetViews(); }
+    public interface AssemblyDoc : ModelDoc2
+    {
+        int GetLightWeightComponentCount(); int ResolveAllLightWeightComponents(bool warnUser);
+    }
     public interface View
     {
         ModelDoc2 ReferencedDocument { get; }
@@ -98,6 +102,8 @@ namespace SolidWorks.Interop.sldworks
 namespace SolidWorks.Interop.swconst
 {
     public enum swComponentVisibilityState_e { swComponentHidden = 0, swComponentVisible = 1, swComponentUnknown = -1 }
+    public enum swComponentSuppressionState_e { swComponentSuppressed = 0, swComponentLightweight = 1, swComponentFullyResolved = 2, swComponentResolved = 3, swComponentFullyLightweight = 4, swComponentInternalIdMismatch = 5 }
+    public enum swComponentResolveStatus_e { swResolveOk = 0, swResolveAbortedByUser = 1, swResolveNotPerformed = 2, swResolveError = 3 }
     public enum swSummInfoField_e { swSumInfoCreateDate = 6 }
     public enum swDocumentTypes_e { swDocPART = 1, swDocASSEMBLY = 2, swDocDRAWING = 3 }
     public enum swUserPreferenceIntegerValue_e { swStepAP, swStepExportPreference, swExportStlUnits, swSTLQuality }

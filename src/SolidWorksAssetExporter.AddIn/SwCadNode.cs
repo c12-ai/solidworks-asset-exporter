@@ -47,8 +47,8 @@ namespace SolidWorksAssetExporter.AddIn
         public string InstanceId { get; private set; }
         public string Name { get; private set; }
         public string InstancePath { get; private set; }
-        public bool IsVisible { get { return _isTraversalRoot || _component == null || !_component.IsHidden(false); } }
-        public bool IsSuppressed { get { return !_isTraversalRoot && _component != null && _component.IsSuppressed(); } }
+        public bool IsVisible { get { return _isTraversalRoot || _component == null || SwComponentState.IsVisible(_component); } }
+        public bool IsSuppressed { get { return !_isTraversalRoot && _component != null && SwComponentState.IsSuppressed(_component); } }
         public bool IsEnvelope { get { return !_isTraversalRoot && _component != null && _component.IsEnvelope(); } }
         public bool IsFixed { get { return !_isTraversalRoot && _component != null && _component.IsFixed(); } }
         public ModelDescriptor Model { get { return _model ?? (_model = ReadModel()); } }
@@ -161,6 +161,7 @@ namespace SolidWorksAssetExporter.AddIn
             var document = application.ActiveDoc as ModelDoc2;
             if (document == null || document.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
                 throw new ValidationException("请先打开一个 SOLIDWORKS 装配体。");
+            ResolveLightweightComponents(document);
             var configuration = document.ConfigurationManager.ActiveConfiguration;
             var component = configuration.GetRootComponent3(true);
             if (component == null) throw new ValidationException("活动配置没有可用的根组件。");
@@ -169,6 +170,36 @@ namespace SolidWorksAssetExporter.AddIn
                 rootName = Path.GetFileNameWithoutExtension(document.GetTitle());
             if (string.IsNullOrWhiteSpace(rootName)) rootName = "<root>";
             return new SwCadNode(application, component, "/" + rootName, true, rootName);
+        }
+
+        private static void ResolveLightweightComponents(ModelDoc2 document)
+        {
+            var assembly = document as AssemblyDoc;
+            if (assembly == null) throw new ValidationException("活动文档无法作为装配体访问。");
+            var count = assembly.GetLightWeightComponentCount();
+            if (count <= 0) return;
+            var status = assembly.ResolveAllLightWeightComponents(false);
+            var remaining = assembly.GetLightWeightComponentCount();
+            if (status != (int)swComponentResolveStatus_e.swResolveOk || remaining != 0)
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "无法完全解析轻化组件：请求解析 {0} 个，仍有 {1} 个；status={2}。", count, remaining, status));
+        }
+    }
+
+    internal static class SwComponentState
+    {
+        public static bool IsVisible(Component2 component)
+        {
+            return component != null && component.Visible == (int)swComponentVisibilityState_e.swComponentVisible;
+        }
+
+        public static bool IsSuppressed(Component2 component)
+        {
+            if (component == null) return false;
+            var state = component.GetSuppression2();
+            if (state == (int)swComponentSuppressionState_e.swComponentInternalIdMismatch)
+                throw new ValidationException("组件内部 ID 不匹配，无法判断抑制状态：" + component.Name2);
+            return state == (int)swComponentSuppressionState_e.swComponentSuppressed;
         }
     }
 }

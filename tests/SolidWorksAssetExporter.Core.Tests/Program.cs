@@ -4,6 +4,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using SolidWorks.Interop.sldworks;
+using SolidWorks.Interop.swconst;
+using SolidWorksAssetExporter.AddIn;
 using SolidWorksAssetExporter.Core;
 
 namespace SolidWorksAssetExporter.Core.Tests
@@ -34,6 +37,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Part Asset source stays single-file", PartAssetSourceStaysSingleFile);
             Run("Assembly Asset source stays inside boundary", AssemblyAssetSourceStaysInsideBoundary);
             Run("Asset source rejects mismatched extension", AssetSourceRejectsMismatchedExtension);
+            Run("SOLIDWORKS component state keeps lightweight nodes", SolidWorksComponentStateKeepsLightweightNodes);
 
             Console.WriteLine(_failures == 0 ? "ALL TESTS PASSED" : _failures + " TEST(S) FAILED");
             return _failures == 0 ? 0 : 1;
@@ -55,6 +59,36 @@ namespace SolidWorksAssetExporter.Core.Tests
             var scan = new AssemblyScanner().Scan(asset);
             Equal(ScanClassification.AssetBoundary, scan.Classification);
             Equal(0, asset.GetChildrenCalls);
+        }
+
+        private static void SolidWorksComponentStateKeepsLightweightNodes()
+        {
+            var lightweight = new FakeSwComponent
+            {
+                VisibleValue = (int)swComponentVisibilityState_e.swComponentVisible,
+                SuppressionState = (int)swComponentSuppressionState_e.swComponentLightweight
+            };
+            var lightweightNode = new SwCadNode(null, lightweight, "/lightweight");
+            True(lightweightNode.IsVisible);
+            Equal(false, lightweightNode.IsSuppressed);
+
+            var hidden = new FakeSwComponent
+            {
+                VisibleValue = (int)swComponentVisibilityState_e.swComponentHidden,
+                SuppressionState = (int)swComponentSuppressionState_e.swComponentResolved
+            };
+            var hiddenNode = new SwCadNode(null, hidden, "/hidden");
+            Equal(false, hiddenNode.IsVisible);
+            Equal(false, hiddenNode.IsSuppressed);
+
+            var suppressed = new FakeSwComponent
+            {
+                VisibleValue = (int)swComponentVisibilityState_e.swComponentVisible,
+                SuppressionState = (int)swComponentSuppressionState_e.swComponentSuppressed
+            };
+            var suppressedNode = new SwCadNode(null, suppressed, "/suppressed");
+            True(suppressedNode.IsVisible);
+            True(suppressedNode.IsSuppressed);
         }
 
         private static void AssetSubassemblyStaysOpaque()
@@ -455,5 +489,23 @@ namespace SolidWorksAssetExporter.Core.Tests
                 UpdateDescendantPaths(child);
             }
         }
+    }
+
+    internal sealed class FakeSwComponent : Component2
+    {
+        public string Name2 { get { return "fake-component"; } }
+        public int Visible { get { return VisibleValue; } }
+        public int VisibleValue { get; set; }
+        public int SuppressionState { get; set; }
+        public MathTransform Transform2 { get { return null; } }
+        public int GetID() { return 1; }
+        public bool IsSuppressed() { return SuppressionState != (int)swComponentSuppressionState_e.swComponentResolved; }
+        public int GetSuppression2() { return SuppressionState; }
+        public bool IsEnvelope() { return false; }
+        public bool IsFixed() { return false; }
+        public bool IsHidden(bool considerSuppressed) { return SuppressionState == (int)swComponentSuppressionState_e.swComponentLightweight; }
+        public bool Select4(bool append, object data, bool showPopup) { return true; }
+        public object GetModelDoc2() { return null; }
+        public object GetChildren() { return null; }
     }
 }
