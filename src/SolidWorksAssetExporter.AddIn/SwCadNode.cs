@@ -47,7 +47,7 @@ namespace SolidWorksAssetExporter.AddIn
         public string InstanceId { get; private set; }
         public string Name { get; private set; }
         public string InstancePath { get; private set; }
-        public bool IsVisible { get { return _isTraversalRoot || _component == null || _component.Visible == (int)swComponentVisibilityState_e.swComponentVisible; } }
+        public bool IsVisible { get { return _isTraversalRoot || _component == null || !_component.IsHidden(false); } }
         public bool IsSuppressed { get { return !_isTraversalRoot && _component != null && _component.IsSuppressed(); } }
         public bool IsEnvelope { get { return !_isTraversalRoot && _component != null && _component.IsEnvelope(); } }
         public bool IsFixed { get { return !_isTraversalRoot && _component != null && _component.IsFixed(); } }

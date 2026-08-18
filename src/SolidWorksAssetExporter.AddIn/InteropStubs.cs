@@ -97,7 +97,7 @@ namespace SolidWorks.Interop.sldworks
 
 namespace SolidWorks.Interop.swconst
 {
-    public enum swComponentVisibilityState_e { swComponentVisible = 2 }
+    public enum swComponentVisibilityState_e { swComponentHidden = 0, swComponentVisible = 1, swComponentUnknown = -1 }
     public enum swSummInfoField_e { swSumInfoCreateDate = 6 }
     public enum swDocumentTypes_e { swDocPART = 1, swDocASSEMBLY = 2, swDocDRAWING = 3 }
     public enum swUserPreferenceIntegerValue_e { swStepAP, swStepExportPreference, swExportStlUnits, swSTLQuality }

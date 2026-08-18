@@ -8,7 +8,7 @@
 
 这解决了“一次性定制件不是 Asset、但后续装配重建仍需要数模”的问题：它会作为最大无 Asset 子树的 `Project` 单元进入当前项目目录，不污染全局 Asset 库。
 
-当前发布版本为 `v1.0.1`。
+当前发布版本为 `v1.0.2`。
 
 ## 当前实现范围
 
@@ -24,7 +24,7 @@
 - Asset 与 Project 独立 staging，成功后目录级提交；既有版本不覆盖。
 - 分类预览和确认窗口；导出模型文档当前活动配置及显示状态，不切换配置或显示状态；导出后恢复选择和 STEP/STL 全局设置。
 
-核心层现有 18 项自动测试，Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建；该 stub 只用于编译检查，生产构建不会包含它。
+核心层现有 20 项自动测试，Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建；该 stub 只用于编译检查，生产构建不会包含它。
 
 本项目已在 SOLIDWORKS Premium 2025 SP5.0 和官方 Interop 33.5.0.53 上完成生产构建、COM 安装与加载、命令打开、完全解析装配体分类预览，以及当前活动配置不切换的导出流程验证。最新的强类型 `SaveAs3` 修复已完成构建和安装；完整 STEP/STL、Pack and Go、SLDDRW/PDF 产物仍需完成最终现场验收。SOLIDWORKS 2026 尚未实机验证。
 
@@ -44,6 +44,55 @@ asset_version = 1          # 必填正整数
 ```
 
 属性可以位于文件级或模型文档当前活动配置级，但同一个名称不能同时出现在两处，即使值相同也会失败。Asset manifest 会把合并后的自定义属性保存为 JSON 键值对。
+
+### Asset 属性填写说明
+
+为避免文件级和配置级属性冲突，现场建模时统一建议把以下属性填写在模型的文件级“自定义”页，不要再在配置级建立同名属性。`asset_attr` 只是 Property Tab Builder 中的界面分组标题，不是需要写入模型的属性。
+
+| 属性 | 类型/格式 | 填写说明 |
+| --- | --- | --- |
+| `is_asset` | 布尔值 | 是否把当前零件或子装配体作为 Asset。填写 `true`、`1` 或 `yes`。Asset 是硬边界，分类扫描不会继续读取其内部节点。 |
+| `class` | 单选枚举 | Asset 的主要类别，必须从 `moveable`、`robot`、`equipment`、`structure` 中选择一个。 |
+| `is_tool` | 布尔值 | 是否作为机器人使用的工具。Tool 本身也可以属于 `moveable`，例如在快换过程中由机器人 attach；Tool 还需要在后续定义 TCP Point。建议统一填写 `true` 或 `false`。 |
+| `accepts_robots` | 文本列表 | 与该 Asset 兼容的机器人型号、名称或约定 ID；多个值使用英文分号 `;` 分隔。没有已确认的兼容机器人时留空，留空不表示兼容全部机器人。 |
+| `is_fixture` | 布尔值 | 是否具有定位、夹持、承载或接收其他 Asset 的治具功能。`moveable` 和 `structure` 都可以同时是 Fixture。 |
+| `accepts_interface` | 文本列表 | Fixture 可以接受的物料接口；多个接口使用英文分号 `;` 分隔。接口名称由团队人工约定，相同接口应复用已有名称。 |
+| `is_placement_required` | 布尔值 | 当前 Asset 是否必须安装或放置在另一个 Asset 上才能使用。 |
+| `placement_interface` | 文本 | 当前 Asset 自己提供的放置接口，接口类型与 Fixture 的 `accepts_interface` 使用同一套人工约定名称，例如 `50ML_tube`。 |
+| `slots_num` | 非负整数 | 当前 Asset 可提供的安装槽位、工位或容纳位置数量；`0` 表示不提供槽位。 |
+| `is_adjustable` | 布尔值 | Asset 的安装位姿或空间布局位置是否允许调整。`moveable` 通常不可调，`structure` 可以根据布局需要设为可调。 |
+| `asset_version` | 正整数 | Asset 内容版本，从 `1` 开始。源模型、图纸或关键内容改变时必须提升版本，不能覆盖已经发布的同版本 Asset。 |
+| `设计原理` | 文本 | 说明该 Asset 实现功能所采用的机械、电气或控制原理。 |
+| `设计目的` | 文本 | 说明设计该 Asset 要解决的问题、目标和预期用途。 |
+| `升版说明` | 文本 | 说明当前版本相对上一版本的修改内容和升版原因；初始版本可填写“初始版本”。 |
+
+`class` 的建议含义：
+
+- `moveable`：机器人能够通过 Tool 操作的物体，通常设置为 `is_adjustable=false`。后续必须为其定义供 Tool attach 的抓取 Point。Tool 本身也可以属于 `moveable`，用于机器人快换。
+- `robot`：执行机构。
+- `equipment`：离心机等外部设备。后续可以定义多个交互 Point，例如按按钮、开盖或其他操作位置。
+- `structure`：不定义交互 Point，也不与机器人直接交互的结构；可以设置 `is_adjustable=true`，表示其空间布局位置允许调整。
+
+以上属性只描述机械工程师在设计阶段能够直接确定的 Asset 分类和治具关系。Position、Area、抓取 Point、TCP Point、设备交互 Point 等空间定义不在当前 Property Tab 中填写，后续直接定义在资产数据中。
+
+条件填写约定：
+
+- `moveable` 可以同时设置 `is_tool=true`；此时必须填写 `accepts_robots`，表示该工具已经适配的机器人。
+- `moveable` 可以同时设置 `is_fixture=true`；此时必须填写 `accepts_interface`，表示该治具可以放置的物料接口，并按需要填写 `slots_num`。
+- `moveable` 可以设置 `is_placement_required=true`；此时必须填写当前 Asset 自己提供的 `placement_interface`。
+- `structure` 也可以设置 `is_fixture=true` 和 `is_adjustable=true`，分别表示它能够接收物料接口、且允许调整空间布局位置。
+- 接口匹配采用简单的名称精确匹配：当前 Asset 的 `placement_interface` 必须出现在承载方的 `accepts_interface` 列表中。
+- `is_adjustable=true` 只表示安装位姿可调，不表示 Asset 的所有机械或工艺参数均可调。
+
+填写示例：
+
+| Asset | `class` | 关键属性 |
+| --- | --- | --- |
+| 50 ml 试管 | `moveable` | `is_placement_required=true`；`placement_interface=50ML_tube` |
+| 50 ml 试管夹 | `moveable` | `is_fixture=true`；`accepts_interface=50ML_tube`；`is_placement_required=true`；`placement_interface=50ML_tube_fix` |
+| 试管架治具 | `structure` | `is_fixture=true`；`accepts_interface=50ML_tube_fix`；`is_adjustable=true` |
+
+当前插件使用 `is_asset` 进行分类；当 `is_asset=true|1|yes` 时强制要求正整数 `asset_version`，并在总装配体上强制要求正整数 `assembly_version`。其余字段按上述业务约定填写并保存到 Asset manifest，暂不参与导出分类或程序校验。
 
 同一 `uuid + asset_version` 的源模型及图纸内容完全一致时，插件会校验现有文件并直接复用旧 Asset；如果内容已经变化，则拒绝用同一个版本号覆盖，必须提升 `asset_version`。当前不维护独立数据库，Asset 地址由资产库根目录、UUID 和版本确定，每个版本目录中的 manifest 是该 Asset 的文件与哈希记录。
 
@@ -122,7 +171,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuratio
 
 ## 安装与卸载
 
-从 GitHub Releases 下载 `SolidWorksAssetExporter-v1.0.1.zip` 并完整解压。关闭 SOLIDWORKS，右键解压目录中的 `Install.cmd`，选择“以管理员身份运行”。如果从源码目录安装，则运行：
+从 GitHub Releases 下载 `SolidWorksAssetExporter-v1.0.2.zip` 并完整解压。关闭 SOLIDWORKS，右键解压目录中的 `Install.cmd`，选择“以管理员身份运行”。如果从源码目录安装，则运行：
 
 ```text
 .\scripts\install.cmd

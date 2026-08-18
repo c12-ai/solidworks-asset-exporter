@@ -15,8 +15,10 @@ namespace SolidWorksAssetExporter.Core.Tests
         private static int Main()
         {
             Run("Asset boundary never reads children", AssetBoundaryNeverReadsChildren);
+            Run("Asset subassembly stays opaque", AssetSubassemblyStaysOpaque);
             Run("Maximal no-Asset subtree becomes Project", MaximalNoAssetSubtree);
             Run("Only Asset-containing branch descends", NestedAssetOnlyDescendsRequiredBranch);
+            Run("Non-Asset subassembly with two Assets becomes Group", NonAssetSubassemblyWithTwoAssetsBecomesGroup);
             Run("All-project root stays one unit", AllProjectRoot);
             Run("Top Asset stays one opaque unit", TopAssetRoot);
             Run("Repeated part occurrences share Asset identity", RepeatedPartOccurrencesShareAssetIdentity);
@@ -55,6 +57,21 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(0, asset.GetChildrenCalls);
         }
 
+        private static void AssetSubassemblyStaysOpaque()
+        {
+            var root = Root();
+            var asset = Node("asset-subassembly", true, true); MarkAsset(asset, 2);
+            asset.ThrowOnChildren = true;
+            root.Add(asset);
+
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+            var exported = plan.Roots.Single();
+
+            Equal(ExportNodeKind.Asset, exported.Kind);
+            Equal(0, exported.Children.Count);
+            Equal(0, asset.GetChildrenCalls);
+        }
+
         private static void MaximalNoAssetSubtree()
         {
             var root = Root();
@@ -90,6 +107,23 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(ExportNodeKind.Project, group.Children.Single(x => x.Name == "fixture").Kind);
             Equal(ExportNodeKind.Project, plan.Roots.Single(x => x.Name == "unrelated").Kind);
             Equal(0, unrelated.Children[0].GetChildrenCalls);
+        }
+
+        private static void NonAssetSubassemblyWithTwoAssetsBecomesGroup()
+        {
+            var root = Root();
+            var subassembly = Node("subassembly", true, true);
+            var first = Node("first-asset", false, false); MarkAsset(first, 1);
+            var second = Node("second-asset", false, false); MarkAsset(second, 1);
+            subassembly.Add(first, second); root.Add(subassembly);
+
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+            var group = plan.Roots.Single();
+
+            Equal(ExportNodeKind.Group, group.Kind);
+            Equal(2, group.Children.Count);
+            Equal(2, group.Children.Count(node => node.Kind == ExportNodeKind.Asset));
+            Equal(0, group.Children.Count(node => node.Kind == ExportNodeKind.Project));
         }
 
         private static void AllProjectRoot()
