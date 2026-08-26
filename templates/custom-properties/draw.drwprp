@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<CPTemplate>
+  <AppVersion>33</AppVersion>
+  <CPSheet>
+    <GroupBox Label="工程图属性" PropName="组框2" DefaultState="Expanded">
+      <Control Label="文件名" PropName="文件名" ApplyTo="Config" Type="TextBox" ReadOnly="False" DefaultValue="SW-File Name" Mode="SWProperty" />
+      <Control Label="绘图" PropName="绘图" ApplyTo="Config" Type="TextBox" ReadOnly="True" DefaultValue="SW-Author" Mode="SWProperty" />
+      <Control Label="绘图时间" PropName="绘图时间" ApplyTo="Config" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Date" />
+      <Control Label="审核" PropName="审核" ApplyTo="Config" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
+      <Control Label="审核时间" PropName="审核时间" ApplyTo="Config" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Date" />
+      <Control Label="修订" PropName="修订" ApplyTo="Config" Type="TextBox" ReadOnly="True" DefaultValue="" Mode="Text" />
+      <Control Label="图纸比例" PropName="图纸比例" ApplyTo="Config" Type="TextBox" ReadOnly="False" DefaultValue="SW-Sheet Scale" Mode="SWProperty" />
+      <Control Label="备注" PropName="备注" ApplyTo="Config" Type="TextBox" ReadOnly="False" DefaultValue="SW-Comments" Mode="SWProperty" />
+    </GroupBox>
+  </CPSheet>
+</CPTemplate>

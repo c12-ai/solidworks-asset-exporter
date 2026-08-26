@@ -1,0 +1,14 @@
+DocumentType,Name,DefaultValue
+All,is_asset,
+All,class,
+All,is_tool,0
+All,is_fixture,0
+All,accepts_interface,
+All,is_placement_required,0
+All,slots_num,0
+All,is_adjustable,0
+All,asset_version,
+All,设计原理,
+All,设计目的,
+All,升版说明,
+Assembly,assembly_version,

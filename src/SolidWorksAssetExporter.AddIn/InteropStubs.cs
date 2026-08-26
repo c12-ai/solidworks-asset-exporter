@@ -23,6 +23,7 @@ namespace SolidWorks.Interop.sldworks
         public object GetExportFileData(int type) { return null; }
         public object GetOpenDocumentByName(string path) { return null; }
         public string GetSearchFolders(int type) { return string.Empty; }
+        public bool RunCommand(int commandId, string newTitle) { return true; }
         public object OpenDoc6(string path, int type, int options, string configuration, ref int errors, ref int warnings) { return null; }
         public object ActivateDoc3(string title, bool usePreferences, int option, ref int errors) { return null; }
         public void CloseDoc(string title) { }
@@ -48,7 +49,11 @@ namespace SolidWorks.Interop.sldworks
         void ClearSelection2(bool all);
     }
 
-    public interface DrawingDoc : ModelDoc2 { object GetViews(); }
+    public interface DrawingDoc : ModelDoc2
+    {
+        object GetViews(); object GetSheetNames(); object GetCurrentSheet(); bool ActivateSheet(string name);
+    }
+    public interface Sheet { string GetName(); }
     public interface AssemblyDoc : ModelDoc2
     {
         int GetLightWeightComponentCount(); int ResolveAllLightWeightComponents(bool warnUser);
@@ -66,6 +71,7 @@ namespace SolidWorks.Interop.sldworks
     public interface ModelDocExtension
     {
         PackAndGo GetPackAndGo(); object SavePackAndGo(PackAndGo value);
+        bool SaveAs(string name, int version, int options, object exportData, ref int errors, ref int warnings);
         bool SaveAs3(string name, int version, int options, object exportData, object advancedSaveAsOptions,
             ref int errors, ref int warnings);
     }
@@ -78,7 +84,7 @@ namespace SolidWorks.Interop.sldworks
         int GetSelectedObjectCount2(int mark); object GetSelectedObject6(int index, int mark);
         int GetSelectedObjectMark(int index); object CreateSelectData();
     }
-    public interface ExportPdfData { bool SetSheets(int mode, object sheets); }
+    public interface ExportPdfData { bool SetSheets(int mode, object sheets); bool ViewPdfAfterSaving { get; set; } }
     public interface PackAndGo
     {
         bool IncludeDrawings { get; set; } bool IncludeSuppressed { get; set; }
@@ -116,8 +122,8 @@ namespace SolidWorks.Interop.swconst
     public enum swSaveAsOptions_e { swSaveAsOptions_Silent = 1 }
     public enum swPackAndGoSaveStatus_e { swPackAndGoSaveStatus_Succeed = 0 }
     public enum swExportDataFileType_e { swExportPdfData = 1 }
-    public enum swExportDataSheetsToExport_e { swExportData_ExportAllSheets = 1 }
-    public enum swOpenDocOptions_e { swOpenDocOptions_Silent = 1 }
+    public enum swExportDataSheetsToExport_e { swExportData_ExportAllSheets = 1, swExportData_ExportSpecifiedSheets = 3 }
+    public enum swOpenDocOptions_e { swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2 }
     public enum swSearchFolderTypes_e { swDocumentType = 0 }
     public enum swRebuildOnActivation_e { swDontRebuildActiveDoc = 1 }
     public enum swCreateCommandGroupErrors { swCreateCommandGroup_Failed = 0, swCreateCommandGroup_Success = 1, swCreateCommandGroup_Exceeds_ToolBarIDs = 2 }
