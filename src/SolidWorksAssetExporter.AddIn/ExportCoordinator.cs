@@ -18,6 +18,7 @@ namespace SolidWorksAssetExporter.AddIn
         }
         public AssemblyExportPlan Plan { get; internal set; }
         public string Preview { get; internal set; }
+        public string PlanFingerprint { get; internal set; }
         public string ProjectFingerprint { get; internal set; }
         internal IDictionary<string, AssetInspection> AssetInspections { get; private set; }
         internal IDictionary<string, string> ProjectFingerprints { get; private set; }
@@ -59,7 +60,26 @@ namespace SolidWorksAssetExporter.AddIn
             var root = SwAssemblyRoot.FromActiveDocument(_app);
             var scan = new AssemblyScanner().Scan(root);
             var plan = new ExportPlanBuilder().Build(scan, settings.ProjectMeshFormat);
-            var result = new AnalysisResult { Plan = plan };
+            var registeredAssets = AssetRegistryStore.RegisteredAssetIds(settings.AssetLibraryRoot);
+            foreach (var asset in Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Asset)
+                .GroupBy(node => node.AssetId, StringComparer.OrdinalIgnoreCase).Select(group => group.First()))
+            {
+                if (registeredAssets.Contains(asset.AssetId)) continue;
+                var version = int.Parse(asset.AssetId.Substring(asset.AssetId.LastIndexOf(':') + 1), CultureInfo.InvariantCulture);
+                if (AssetRegistryStore.ImportKnownManifest(settings.AssetLibraryRoot, asset.GeometryUuid, version))
+                    registeredAssets.Add(asset.AssetId);
+            }
+            return new AnalysisResult
+            {
+                Plan = plan,
+                PlanFingerprint = CalculatePlanFingerprint(plan),
+                Preview = BuildPreview(plan.Roots, registeredAssets)
+            };
+        }
+
+        private AnalysisResult InspectForExport(AssemblyExportPlan plan, ExporterSettings settings)
+        {
+            var result = new AnalysisResult { Plan = plan, PlanFingerprint = CalculatePlanFingerprint(plan) };
 
             foreach (var group in Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Asset).GroupBy(node => node.AssetId, StringComparer.OrdinalIgnoreCase))
             {
@@ -78,24 +98,26 @@ namespace SolidWorksAssetExporter.AddIn
             }
 
             result.ProjectFingerprint = CalculateProjectFingerprint(plan, result.ProjectFingerprints);
-            result.Preview = BuildPreview(plan.Roots, result.AssetInspections);
             return result;
         }
 
         public ExportCompletion Export(AnalysisResult previewed, ExporterSettings settings)
         {
             if (previewed == null) throw new ArgumentNullException("previewed");
-            var current = Analyze(settings);
-            if (!string.Equals(previewed.ProjectFingerprint, current.ProjectFingerprint, StringComparison.OrdinalIgnoreCase))
-                throw new ValidationException("预览后装配结构或内容发生变化，请重新预览。");
+            var currentPlan = Analyze(settings);
+            if (!string.Equals(previewed.PlanFingerprint, currentPlan.PlanFingerprint, StringComparison.OrdinalIgnoreCase))
+                throw new ValidationException("预览后装配结构、位姿或导出设置发生变化，请重新预览。");
 
             var activeDocument = _app.ActiveDoc as ModelDoc2;
             var completion = new ExportCompletion();
             using (new SwSelectionScope(activeDocument))
-            using (new SwExportPreferenceScope(_app))
             {
-                ExportAssets(current, settings, completion);
-                ExportProject(current, settings, completion);
+                var current = InspectForExport(currentPlan.Plan, settings);
+                using (new SwExportPreferenceScope(_app))
+                {
+                    ExportAssets(current, settings, completion);
+                    ExportProject(current, settings, completion);
+                }
             }
             return completion;
         }
@@ -103,7 +125,7 @@ namespace SolidWorksAssetExporter.AddIn
         private AssetInspection InspectAsset(SwCadNode source, ExportNode node, ExporterSettings settings)
         {
             var modelFiles = _packager.AssetModelFiles(source);
-            var drawings = _drawings.FindDirectDrawingFiles(modelFiles, settings.DrawingSearchDirectories);
+            var drawings = _drawings.FindDirectDrawingFiles(modelFiles);
             var modelEntries = modelFiles.Select(path => Canonical.Join(Path.GetFileName(path),
                 new FileInfo(path).Length.ToString(CultureInfo.InvariantCulture), FileHash.Sha256(path)))
                 .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
@@ -126,6 +148,8 @@ namespace SolidWorksAssetExporter.AddIn
                 var assetId = pair.Key; var inspection = pair.Value;
                 if (inspection.State == ExistingAssetState.Reusable)
                 {
+                    var reusedUuid = IdentityService.AssetUuid(inspection.Node.Model).ToString("D");
+                    AssetRegistryStore.Register(settings.AssetLibraryRoot, reusedUuid, inspection.Version, inspection.Fingerprint);
                     completion.ReusedAssets++; reportReused.Add(assetId); continue;
                 }
                 var uuid = IdentityService.AssetUuid(inspection.Node.Model).ToString("D");
@@ -151,6 +175,7 @@ namespace SolidWorksAssetExporter.AddIn
                     JsonFile.Write(Path.Combine(transaction.StagingDirectory, manifestName), manifest);
                     transaction.Commit();
                 }
+                AssetRegistryStore.Register(settings.AssetLibraryRoot, uuid, inspection.Version, inspection.Fingerprint);
                 completion.CreatedAssets++; reportCreated.Add(assetId);
             }
         }
@@ -195,41 +220,52 @@ namespace SolidWorksAssetExporter.AddIn
 
         private static string CalculateProjectFingerprint(AssemblyExportPlan plan, IDictionary<string, string> unitFingerprints)
         {
-            var builder = new StringBuilder();
-            builder.Append(Canonical.Join(plan.AssemblyUuid, plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture), plan.MeshFormat.ToString()));
-            foreach (var node in Flatten(plan.Roots))
-            {
-                builder.Append(Canonical.Join(node.Id, node.ParentId, node.Name, node.Kind.ToString(), node.AssetId, node.MeshFile,
-                    node.GeometryUuid, Number(node.Pose.Tx), Number(node.Pose.Ty), Number(node.Pose.Tz),
-                    Number(node.Pose.Rotation.X), Number(node.Pose.Rotation.Y), Number(node.Pose.Rotation.Z), Number(node.Pose.Rotation.W)));
-            }
+            var builder = PlanFingerprintMaterial(plan);
             foreach (var unit in unitFingerprints.OrderBy(value => value.Key, StringComparer.OrdinalIgnoreCase))
                 builder.Append(Canonical.Join(unit.Key, unit.Value));
             return FileHash.Sha256Text(builder.ToString());
         }
 
-        private static string BuildPreview(IEnumerable<ExportNode> roots, IDictionary<string, AssetInspection> assets)
+        private static string CalculatePlanFingerprint(AssemblyExportPlan plan)
+        {
+            return FileHash.Sha256Text(PlanFingerprintMaterial(plan).ToString());
+        }
+
+        private static StringBuilder PlanFingerprintMaterial(AssemblyExportPlan plan)
+        {
+            var builder = new StringBuilder();
+            builder.Append(Canonical.Join(plan.AssemblyUuid, plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture), plan.MeshFormat.ToString()));
+            foreach (var node in Flatten(plan.Roots))
+                builder.Append(Canonical.Join(node.Id, node.ParentId, node.Name, node.Kind.ToString(), node.AssetId, node.MeshFile,
+                    node.GeometryUuid, Number(node.Pose.Tx), Number(node.Pose.Ty), Number(node.Pose.Tz),
+                    Number(node.Pose.Rotation.X), Number(node.Pose.Rotation.Y), Number(node.Pose.Rotation.Z), Number(node.Pose.Rotation.W)));
+            return builder;
+        }
+
+        private static string BuildPreview(IEnumerable<ExportNode> roots, ISet<string> registeredAssets)
         {
             var builder = new StringBuilder(); var values = roots.ToList();
             var seenAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < values.Count; i++)
-                AppendPreview(builder, values[i], string.Empty, i == values.Count - 1, assets, seenAssets);
+                AppendPreview(builder, values[i], string.Empty, i == values.Count - 1, registeredAssets, seenAssets);
             return builder.ToString().TrimEnd();
         }
 
         private static void AppendPreview(StringBuilder builder, ExportNode node, string indent, bool last,
-            IDictionary<string, AssetInspection> assets, ISet<string> seenAssets)
+            ISet<string> registeredAssets, ISet<string> seenAssets)
         {
             builder.Append(indent).Append(last ? "└─ " : "├─ ").Append(node.Kind.ToString().PadRight(8)).Append(' ').Append(node.Name);
             if (node.Kind == ExportNodeKind.Asset)
-                builder.Append(seenAssets.Add(node.AssetId)
-                    ? (assets[node.AssetId].State == ExistingAssetState.Reusable ? "  [库中已存在]" : "  [需要新建]")
-                    : "  [同一 Asset 的另一实例]");
+            {
+                if (seenAssets.Add(node.AssetId))
+                    builder.Append(registeredAssets.Contains(node.AssetId) ? "  [已注册，预计复用]" : "  [未注册，预计新建]");
+                else builder.Append("  [同一 Asset 的另一实例]");
+            }
             if (node.Kind == ExportNodeKind.Project) builder.Append("  [导出 STEP/STL]");
             builder.AppendLine();
             var children = node.Children.ToList();
             for (var i = 0; i < children.Count; i++)
-                AppendPreview(builder, children[i], indent + (last ? "   " : "│  "), i == children.Count - 1, assets, seenAssets);
+                AppendPreview(builder, children[i], indent + (last ? "   " : "│  "), i == children.Count - 1, registeredAssets, seenAssets);
         }
 
         private static IEnumerable<ExportNode> Flatten(IEnumerable<ExportNode> roots)

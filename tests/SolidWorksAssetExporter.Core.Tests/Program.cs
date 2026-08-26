@@ -37,6 +37,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Part Asset source stays single-file", PartAssetSourceStaysSingleFile);
             Run("Assembly Asset source stays inside boundary", AssemblyAssetSourceStaysInsideBoundary);
             Run("Asset source rejects mismatched extension", AssetSourceRejectsMismatchedExtension);
+            Run("Asset registry persists one entry per Asset ID", AssetRegistryPersistsOneEntryPerAssetId);
             Run("SOLIDWORKS component state keeps lightweight nodes", SolidWorksComponentStateKeepsLightweightNodes);
 
             Console.WriteLine(_failures == 0 ? "ALL TESTS PASSED" : _failures + " TEST(S) FAILED");
@@ -378,6 +379,34 @@ namespace SolidWorksAssetExporter.Core.Tests
             part.Model.DocumentKind = DocumentKind.Part;
             part.Model.FullPath = "C:\\models\\asset-part.SLDASM";
             Throws<ValidationException>(() => AssetSourcePlanner.CollectModelFiles(part));
+        }
+
+        private static void AssetRegistryPersistsOneEntryPerAssetId()
+        {
+            var temp = TempDirectory();
+            try
+            {
+                var uuid = Guid.NewGuid();
+                var assetId = IdentityService.AssetId(uuid, 3);
+                Equal(0, AssetRegistryStore.RegisteredAssetIds(temp).Count);
+                AssetRegistryStore.Register(temp, uuid.ToString("D"), 3, "fingerprint-a");
+                True(File.Exists(Path.Combine(temp, AssetRegistryStore.FileName)));
+                True(AssetRegistryStore.RegisteredAssetIds(temp).Contains(assetId));
+                AssetRegistryStore.Register(temp, uuid.ToString("D"), 3, "fingerprint-b");
+                var registry = AssetRegistryStore.Load(temp);
+                Equal(1, registry.Assets.Count);
+                Equal("fingerprint-b", registry.Assets[0].ContentFingerprint);
+                Equal(uuid.ToString("D") + "/v3", registry.Assets[0].RelativeDirectory);
+
+                var legacyUuid = Guid.NewGuid();
+                var legacyDirectory = Path.Combine(temp, legacyUuid.ToString("D"), "v2");
+                Directory.CreateDirectory(legacyDirectory);
+                JsonFile.Write(Path.Combine(legacyDirectory, "asset_" + legacyUuid.ToString("D") + "_v2.json"),
+                    new AssetManifest { SchemaVersion = "1.0", Uuid = legacyUuid.ToString("D"), Version = 2, ContentFingerprint = "legacy-fingerprint" });
+                True(AssetRegistryStore.ImportKnownManifest(temp, legacyUuid.ToString("D"), 2));
+                Equal(2, AssetRegistryStore.Load(temp).Assets.Count);
+            }
+            finally { Directory.Delete(temp, true); }
         }
 
         private static FakeNode Root()

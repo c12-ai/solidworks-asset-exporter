@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -287,12 +289,26 @@ namespace SolidWorksAssetExporter.AddIn
             if (!packAndGo.SetDocumentSaveToNames(saveNames))
                 throw new ValidationException("Pack and Go 无法设置 Asset 层级文件清单。");
             var statuses = document.Extension.SavePackAndGo(packAndGo) as int[];
-            if (statuses == null || statuses.Length != originalNames.Count)
-                throw new ValidationException("Pack and Go 未返回完整保存状态。");
-            for (var i = 0; i < statuses.Length; i++)
-                if (allowed.Contains(Path.GetFullPath(originalNames[i])) &&
-                    statuses[i] != (int)swPackAndGoSaveStatus_e.swPackAndGoSaveStatus_Succeed)
-                    throw new ValidationException("Pack and Go 未能保存 Asset 层级模型：" + originalNames[i]);
+            if (statuses == null)
+                throw new ValidationException("Pack and Go 未返回保存状态。");
+            var selectedIndexes = Enumerable.Range(0, saveNames.Length)
+                .Where(index => !string.IsNullOrWhiteSpace(saveNames[index])).ToList();
+            if (statuses.Length == originalNames.Count)
+            {
+                foreach (var index in selectedIndexes)
+                    EnsurePackAndGoSucceeded(statuses[index], originalNames[index]);
+            }
+            else if (statuses.Length == selectedIndexes.Count)
+            {
+                for (var i = 0; i < selectedIndexes.Count; i++)
+                    EnsurePackAndGoSucceeded(statuses[i], originalNames[selectedIndexes[i]]);
+            }
+            else
+            {
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "Pack and Go 保存状态数量异常：原始文件 {0}，实际保存 {1}，返回状态 {2}。",
+                    originalNames.Count, selectedIndexes.Count, statuses.Length));
+            }
             var expectedOutputs = new HashSet<string>(destinations.Values.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
             var actualOutputs = new HashSet<string>(Directory.EnumerateFiles(destinationDirectory, "*", SearchOption.AllDirectories)
                 .Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
@@ -302,6 +318,13 @@ namespace SolidWorksAssetExporter.AddIn
             var unexpectedOutputs = actualOutputs.Where(path => !expectedOutputs.Contains(path)).ToList();
             if (unexpectedOutputs.Count != 0)
                 throw new ValidationException("Pack and Go 输出了 Asset 层级外文件：" + string.Join("; ", unexpectedOutputs));
+        }
+
+        private static void EnsurePackAndGoSucceeded(int status, string originalName)
+        {
+            if (status != (int)swPackAndGoSaveStatus_e.swPackAndGoSaveStatus_Succeed)
+                throw new ValidationException("Pack and Go 未能保存 Asset 层级模型：" + originalName + "；status=" +
+                    status.ToString(CultureInfo.InvariantCulture));
         }
 
         private static IList<string> ToStrings(object values)
@@ -336,6 +359,8 @@ namespace SolidWorksAssetExporter.AddIn
 
     public sealed class SwDrawingExporter
     {
+        // SolidWorks.Interop.swcommands.swCommands_e.swCommands_Open_Associated_Drw.
+        private const int OpenAssociatedDrawingCommandId = 2458;
         private readonly SldWorks _app;
         public SwDrawingExporter(SldWorks app) { _app = app; }
 
@@ -354,93 +379,134 @@ namespace SolidWorksAssetExporter.AddIn
             return exported;
         }
 
-        public IList<string> FindDirectDrawingFiles(IEnumerable<string> modelFiles, IEnumerable<string> extraDirectories)
+        public IList<string> FindDirectDrawingFiles(IEnumerable<string> modelFiles)
         {
-            var models = new HashSet<string>((modelFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-            return FindCandidates(models, extraDirectories).Distinct(StringComparer.OrdinalIgnoreCase)
-                .Where(path => DirectlyReferencesAny(path, models))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+            var drawings = new List<string>();
+            var original = _app.ActiveDoc as ModelDoc2;
+            if (original == null) throw new ValidationException("查找工程图时没有活动的 SOLIDWORKS 文档。");
+
+            foreach (var modelPath in (modelFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                // SOLIDWORKS 的“打开工程图”只自动查找模型同目录下的同名图纸。
+                // 先判断文件是否存在，避免命令在未找到时弹出全局浏览窗口。
+                var expectedDrawing = Path.ChangeExtension(modelPath, ".SLDDRW");
+                if (!File.Exists(expectedDrawing)) continue;
+                OpenUsingSolidWorksCommand(modelPath, expectedDrawing, original);
+                drawings.Add(Path.GetFullPath(expectedDrawing));
+            }
+            RestoreActiveDocument(original);
+            return drawings.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private IEnumerable<string> FindCandidates(IEnumerable<string> modelPaths, IEnumerable<string> extraDirectories)
+        private void OpenUsingSolidWorksCommand(string modelPath, string expectedDrawing, ModelDoc2 original)
         {
-            var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var requiredDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var modelPath in modelPaths)
-            {
-                var modelDirectory = Path.GetDirectoryName(modelPath);
-                if (string.IsNullOrWhiteSpace(modelDirectory) || !Directory.Exists(modelDirectory))
-                    throw new ValidationException("Asset 模型目录不存在：" + modelDirectory);
-                var fullDirectory = Path.GetFullPath(modelDirectory);
-                directories.Add(fullDirectory); requiredDirectories.Add(fullDirectory);
-            }
-            foreach (var value in extraDirectories ?? Enumerable.Empty<string>())
-            {
-                string fullDirectory;
-                try { fullDirectory = Path.GetFullPath(value); }
-                catch (Exception ex) { throw new ValidationException("额外图纸搜索目录无效：" + value + "；" + ex.Message); }
-                if (!Directory.Exists(fullDirectory)) throw new ValidationException("额外图纸搜索目录不存在：" + fullDirectory);
-                directories.Add(fullDirectory); requiredDirectories.Add(fullDirectory);
-            }
+            var model = _app.GetOpenDocumentByName(modelPath) as ModelDoc2;
+            if (model == null) throw new ValidationException("Asset 模型未在 SOLIDWORKS 中加载：" + modelPath);
+            var alreadyOpen = _app.GetOpenDocumentByName(expectedDrawing) as ModelDoc2;
             try
             {
-                var search = _app.GetSearchFolders((int)swSearchFolderTypes_e.swDocumentType);
-                foreach (var value in (search ?? string.Empty).Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
-                    if (Directory.Exists(value.Trim())) directories.Add(Path.GetFullPath(value.Trim()));
+                ActivateDocument(model);
+                model.ClearSelection2(true);
+                if (!_app.RunCommand(OpenAssociatedDrawingCommandId, "Asset Exporter: Open Drawing"))
+                    throw new ValidationException("SOLIDWORKS“打开工程图”命令执行失败：" + modelPath);
+                var opened = _app.GetOpenDocumentByName(expectedDrawing) as ModelDoc2;
+                if (opened == null)
+                    throw new ValidationException("SOLIDWORKS 未打开模型对应的工程图：" + expectedDrawing);
             }
-            catch { }
-            foreach (var directory in directories)
+            finally
             {
-                IEnumerable<string> files;
-                try { files = Directory.GetFiles(directory, "*.SLDDRW", SearchOption.AllDirectories); }
-                catch (Exception ex)
+                if (alreadyOpen == null)
                 {
-                    if (requiredDirectories.Contains(directory))
-                        throw new ValidationException("无法搜索图纸目录：" + directory + "；" + ex.Message);
-                    continue;
+                    var opened = _app.GetOpenDocumentByName(expectedDrawing) as ModelDoc2;
+                    if (opened != null) _app.CloseDoc(opened.GetTitle());
                 }
-                foreach (var file in files) yield return file;
+                RestoreActiveDocument(original);
             }
         }
 
-        private bool DirectlyReferencesAny(string drawingPath, ISet<string> modelPaths)
+        private void ActivateDocument(ModelDoc2 document)
         {
-            bool openedHere; var document = OpenDrawing(drawingPath, out openedHere);
-            try
-            {
-                var drawing = document as DrawingDoc;
-                var sheetGroups = drawing == null ? null : drawing.GetViews() as object[];
-                if (sheetGroups == null) return false;
-                foreach (var group in sheetGroups)
-                {
-                    var views = group as object[]; if (views == null) continue;
-                    foreach (var item in views)
-                    {
-                        var view = item as View; if (view == null) continue;
-                        if (ViewReferencesAnyModel(view, drawingPath, modelPaths)) return true;
-                    }
-                }
-                return false;
-            }
-            finally { if (openedHere) _app.CloseDoc(document.GetTitle()); }
+            int errors = 0;
+            var active = _app.ActivateDoc3(document.GetTitle(), false,
+                (int)swRebuildOnActivation_e.swDontRebuildActiveDoc, ref errors) as ModelDoc2;
+            if (active == null || errors != 0)
+                throw new ValidationException("无法激活模型以调用“打开工程图”：" + document.GetPathName() + "; errors=" + errors);
+        }
+
+        private void RestoreActiveDocument(ModelDoc2 document)
+        {
+            if (document == null) return;
+            var active = _app.ActiveDoc as ModelDoc2;
+            if (active != null && string.Equals(active.GetTitle(), document.GetTitle(), StringComparison.OrdinalIgnoreCase)) return;
+            ActivateDocument(document);
         }
 
         private void ExportAllSheetsPdf(string drawingPath, string destination)
         {
+            EnsureUnicodePdfFontAvailable();
             bool openedHere; var document = OpenDrawing(drawingPath, out openedHere);
             try
             {
-                var data = (ExportPdfData)_app.GetExportFileData((int)swExportDataFileType_e.swExportPdfData);
-                if (data == null || !data.SetSheets((int)swExportDataSheetsToExport_e.swExportData_ExportAllSheets, null))
-                    throw new ValidationException("无法设置 PDF 全页导出：" + drawingPath);
-                int errors = 0, warnings = 0;
-                var ok = document.Extension.SaveAs3(destination, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
-                    (int)swSaveAsOptions_e.swSaveAsOptions_Silent, data, null, ref errors, ref warnings);
-                if (!ok || errors != 0 || !File.Exists(destination))
-                    throw new ValidationException("图纸 PDF 导出失败：" + drawingPath);
+                using (new SwActiveDocumentScope(_app, document))
+                {
+                    var data = (ExportPdfData)_app.GetExportFileData((int)swExportDataFileType_e.swExportPdfData);
+                    var drawing = document as DrawingDoc;
+                    var sheetNames = DrawingSheetNames(drawing);
+                    if (sheetNames.Count == 0)
+                        throw new ValidationException("图纸不包含可导出的 Sheet：" + drawingPath);
+                    var currentSheet = drawing.GetCurrentSheet() as Sheet;
+                    var currentSheetName = currentSheet == null ? string.Empty : currentSheet.GetName();
+                    var sheets = new DispatchWrapper[sheetNames.Count];
+                    try
+                    {
+                        for (var i = 0; i < sheetNames.Count; i++)
+                        {
+                            if (!drawing.ActivateSheet(sheetNames[i]))
+                                throw new ValidationException("无法激活图纸 Sheet：" + sheetNames[i] + "；" + drawingPath);
+                            var sheet = drawing.GetCurrentSheet() as Sheet;
+                            if (sheet == null) throw new ValidationException("无法读取图纸 Sheet：" + sheetNames[i] + "；" + drawingPath);
+                            sheets[i] = new DispatchWrapper(sheet);
+                        }
+                    }
+                    finally
+                    {
+                        if (!string.IsNullOrWhiteSpace(currentSheetName)) drawing.ActivateSheet(currentSheetName);
+                    }
+                    if (data == null || !data.SetSheets((int)swExportDataSheetsToExport_e.swExportData_ExportSpecifiedSheets, sheets))
+                        throw new ValidationException("无法设置 PDF 全页导出：" + drawingPath);
+                    data.ViewPdfAfterSaving = false;
+                    int errors = 0, warnings = 0;
+                    var ok = document.Extension.SaveAs(destination, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
+                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent, data, ref errors, ref warnings);
+                    if (!ok || errors != 0 || !File.Exists(destination))
+                        throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                            "图纸 PDF 导出失败：{0}；目标：{1}；errors={2}, warnings={3}, SaveAs={4}",
+                            drawingPath, destination, errors, warnings, ok));
+                }
             }
             finally { if (openedHere) _app.CloseDoc(document.GetTitle()); }
+        }
+
+        private static IList<string> DrawingSheetNames(DrawingDoc drawing)
+        {
+            if (drawing == null) return new List<string>();
+            var values = drawing.GetSheetNames();
+            var strings = values as string[];
+            if (strings != null) return strings.Where(value => !string.IsNullOrWhiteSpace(value)).ToList();
+            var objects = values as object[];
+            return objects == null ? new List<string>() : objects.Select(value => Convert.ToString(value, CultureInfo.InvariantCulture))
+                .Where(value => !string.IsNullOrWhiteSpace(value)).ToList();
+        }
+
+        private static void EnsureUnicodePdfFontAvailable()
+        {
+            using (var fonts = new InstalledFontCollection())
+            {
+                if (fonts.Families.Any(font => string.Equals(font.Name, "Arial Unicode MS", StringComparison.OrdinalIgnoreCase))) return;
+            }
+            throw new ValidationException("系统缺少或未正确安装字体“Arial Unicode MS”，SOLIDWORKS 无法导出包含中文等非英文字符的 PDF。" +
+                "请从有合法 Microsoft Office 授权的安装介质修复该字体，或先把图纸文字替换为系统已安装且支持中文的字体，然后重试。");
         }
 
         private ModelDoc2 OpenDrawing(string path, out bool openedHere)
@@ -453,49 +519,10 @@ namespace SolidWorksAssetExporter.AddIn
             }
             int errors = 0, warnings = 0;
             var document = _app.OpenDoc6(path, (int)swDocumentTypes_e.swDocDRAWING,
-                (int)swOpenDocOptions_e.swOpenDocOptions_Silent, string.Empty, ref errors, ref warnings) as ModelDoc2;
+                (int)swOpenDocOptions_e.swOpenDocOptions_Silent | (int)swOpenDocOptions_e.swOpenDocOptions_ReadOnly,
+                string.Empty, ref errors, ref warnings) as ModelDoc2;
             if (document == null || errors != 0) throw new ValidationException("无法打开图纸：" + path);
-            if (document.GetSaveFlag())
-            {
-                _app.CloseDoc(document.GetTitle());
-                throw new ValidationException("图纸打开后存在未保存修改或需要重建：" + path);
-            }
             openedHere = true; return document;
-        }
-
-        private static string ResolveModelReference(string reference, string drawingPath)
-        {
-            if (string.IsNullOrWhiteSpace(reference)) return null;
-            try
-            {
-                return Path.IsPathRooted(reference) ? Path.GetFullPath(reference) : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(drawingPath), reference));
-            }
-            catch { return null; }
-        }
-
-        private static bool ViewReferencesAnyModel(View view, string drawingPath, ISet<string> modelPaths)
-        {
-            var current = view;
-            for (var depth = 0; current != null && depth < 32; depth++)
-            {
-                try
-                {
-                    var referenced = current.ReferencedDocument;
-                    var path = referenced == null ? null : referenced.GetPathName();
-                    if (!string.IsNullOrWhiteSpace(path) && modelPaths.Contains(Path.GetFullPath(path))) return true;
-                }
-                catch { }
-                try
-                {
-                    var name = current.GetReferencedModelName();
-                    var resolved = ResolveModelReference(name, drawingPath);
-                    if (resolved != null && modelPaths.Contains(resolved)) return true;
-                }
-                catch { }
-                try { current = current.GetBaseView() as View; }
-                catch { current = null; }
-            }
-            return false;
         }
 
         private static string UniquePath(string directory, string fileName)
