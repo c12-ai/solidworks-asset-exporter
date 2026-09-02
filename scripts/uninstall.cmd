@@ -18,6 +18,7 @@ set "INSTALL_DIR=%ProgramData%\SolidWorksAssetExporter"
 set "ADDIN=%INSTALL_DIR%\SolidWorksAssetExporter.AddIn.dll"
 set "TYPELIB=%INSTALL_DIR%\SolidWorksAssetExporter.AddIn.tlb"
 set "REGASM=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"
+set "STARTUP_SCRIPT=%~dp0set-interactive-user-startup.ps1"
 
 if exist "%ADDIN%" (
     if not exist "%REGASM%" (
@@ -29,6 +30,10 @@ if exist "%ADDIN%" (
         echo ERROR: COM unregistration failed.
         goto :error
     )
+)
+
+if exist "%STARTUP_SCRIPT%" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%STARTUP_SCRIPT%" -Mode Disable
 )
 
 if exist "%INSTALL_DIR%" rmdir /S /Q "%INSTALL_DIR%"

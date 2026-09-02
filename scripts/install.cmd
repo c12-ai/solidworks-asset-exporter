@@ -17,9 +17,14 @@ if not errorlevel 1 (
 set "PAYLOAD=%~dp0payload"
 set "INSTALL_DIR=%ProgramData%\SolidWorksAssetExporter"
 set "REGASM=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"
+set "STARTUP_SCRIPT=%~dp0set-interactive-user-startup.ps1"
 
 if not exist "%REGASM%" (
     echo ERROR: 64-bit .NET Framework RegAsm.exe was not found.
+    goto :error
+)
+if not exist "%STARTUP_SCRIPT%" (
+    echo ERROR: Installation package is missing set-interactive-user-startup.ps1.
     goto :error
 )
 
@@ -56,9 +61,15 @@ if errorlevel 1 (
     goto :error
 )
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%STARTUP_SCRIPT%" -Mode Enable
+if errorlevel 1 (
+    echo ERROR: Failed to enable the add-in for the interactive Windows user.
+    goto :error
+)
+
 echo.
 echo SOLIDWORKS Asset Exporter was installed successfully.
-echo Restart SOLIDWORKS and enable the add-in from Tools ^> Add-Ins.
+echo Restart SOLIDWORKS. The add-in has been enabled for the interactive Windows user.
 goto :success
 
 :copy_error

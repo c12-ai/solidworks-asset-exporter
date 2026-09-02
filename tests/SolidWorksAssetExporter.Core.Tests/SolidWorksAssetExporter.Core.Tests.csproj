@@ -20,7 +20,10 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Net.Http" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
@@ -39,6 +42,33 @@
     </Compile>
     <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\SwCadNode.cs">
       <Link>AddIn\SwCadNode.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\SwDocumentWindowScope.cs">
+      <Link>AddIn\SwDocumentWindowScope.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\SwExportServices.cs">
+      <Link>AddIn\SwExportServices.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\FileFingerprintCache.cs">
+      <Link>AddIn\FileFingerprintCache.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\ExportSourceSnapshot.cs">
+      <Link>AddIn\ExportSourceSnapshot.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\ExportCoordinator.cs">
+      <Link>AddIn\ExportCoordinator.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\WanxiangDataClient.cs">
+      <Link>AddIn\WanxiangDataClient.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\Settings.cs">
+      <Link>AddIn\Settings.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\WanxiangRegistryProvider.cs">
+      <Link>AddIn\WanxiangRegistryProvider.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\WanxiangExportUploader.cs">
+      <Link>AddIn\WanxiangExportUploader.cs</Link>
     </Compile>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

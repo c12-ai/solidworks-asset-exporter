@@ -137,6 +137,13 @@ namespace SolidWorksAssetExporter.Core
         public static ExistingAssetState Inspect(string assetVersionDirectory, string expectedUuid, int expectedVersion,
             string currentContentFingerprint)
         {
+            return Inspect(assetVersionDirectory, expectedUuid, expectedVersion, currentContentFingerprint, FileHash.Sha256);
+        }
+
+        public static ExistingAssetState Inspect(string assetVersionDirectory, string expectedUuid, int expectedVersion,
+            string currentContentFingerprint, Func<string, string> hashFile)
+        {
+            if (hashFile == null) throw new ArgumentNullException("hashFile");
             var manifestPath = Path.Combine(assetVersionDirectory,
                 "asset_" + expectedUuid + "_v" + expectedVersion.ToString(CultureInfo.InvariantCulture) + ".json");
             if (!Directory.Exists(assetVersionDirectory) && !File.Exists(manifestPath)) return ExistingAssetState.Missing;
@@ -150,9 +157,22 @@ namespace SolidWorksAssetExporter.Core
                 throw new ValidationException("Asset ID 已存在但当前模型内容不同；请提升 asset_version。");
             var assetPaths = new HashSet<string>((manifest.Files ?? new List<ManifestFile>()).Select(value => (value.Path ?? string.Empty).Replace('\\', '/')),
                 StringComparer.OrdinalIgnoreCase);
-            if (!assetPaths.Contains("geometry/model.step") || !assetPaths.Contains("geometry/model.stl") ||
-                !assetPaths.Any(value => value.StartsWith("source/models/", StringComparison.OrdinalIgnoreCase)))
-                throw new ValidationException("Asset manifest 缺少 STEP、STL 或源模型包声明。");
+            var robot = PropertyRules.IsRobotClass(manifest.Properties);
+            if (robot)
+            {
+                if (assetPaths.Count != 0)
+                    throw new ValidationException("Robot Asset 是纯元数据包，manifest 的 files 必须为空，不能包含 STEP、STL、SOLIDWORKS 源模型或图纸。");
+            }
+            else
+            {
+                var sourceModels = assetPaths.Where(value => value.StartsWith("source/models/",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    (value.EndsWith(".sldprt", StringComparison.OrdinalIgnoreCase) ||
+                     value.EndsWith(".sldasm", StringComparison.OrdinalIgnoreCase))).ToList();
+                if (!assetPaths.Contains("geometry/model.step") || !assetPaths.Contains("geometry/model.stl") ||
+                    sourceModels.Count == 0)
+                    throw new ValidationException("Asset manifest 缺少 STEP、STL 或源模型包声明。");
+            }
             if (assetPaths.Count != (manifest.Files ?? new List<ManifestFile>()).Count)
                 throw new ValidationException("Asset manifest 包含重复文件路径。");
             foreach (var file in manifest.Files ?? new List<ManifestFile>())
@@ -160,7 +180,7 @@ namespace SolidWorksAssetExporter.Core
                 var fullPath = PathPolicy.CombineUnderRoot(assetVersionDirectory, file.Path);
                 if (!File.Exists(fullPath)) throw new ValidationException("Asset manifest 声明的文件不存在: [" + file.Path + "]。");
                 var info = new FileInfo(fullPath);
-                if (info.Length != file.Size || !string.Equals(FileHash.Sha256(fullPath), file.Sha256, StringComparison.OrdinalIgnoreCase))
+                if (info.Length != file.Size || !string.Equals(hashFile(fullPath), file.Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new ValidationException("Asset 文件哈希或大小校验失败: [" + file.Path + "]。");
             }
             return ExistingAssetState.Reusable;

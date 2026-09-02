@@ -12,6 +12,7 @@ namespace SolidWorksAssetExporter.Core
         public const string IsAsset = "is_asset";
         public const string AssetVersion = "asset_version";
         public const string AssemblyVersion = "assembly_version";
+        public const string AssetClass = "class";
 
         public static IDictionary<string, string> Merge(ModelDescriptor model)
         {
@@ -29,6 +30,36 @@ namespace SolidWorksAssetExporter.Core
                 }
             }
             return result;
+        }
+
+        public static IDictionary<string, string> MergeForClassification(ModelDescriptor model)
+        {
+            if (model == null) throw new ValidationException("模型元数据为空。");
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            CopyClassification(result, model.FileProperties, "文件级", model.FileName);
+            CopyClassification(result, model.ConfigurationProperties, "配置级", model.FileName);
+            return result;
+        }
+
+        private static void CopyClassification(IDictionary<string, string> target,
+            IDictionary<string, string> source, string scope, string fileName)
+        {
+            if (source == null) return;
+            foreach (var pair in source)
+            {
+                if (!IsClassificationProperty(pair.Key)) continue;
+                if (target.ContainsKey(pair.Key))
+                    throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                        "模型 [{0}] 的分类属性 [{1}] 同时存在于文件级和配置级，不能确定唯一值。", fileName, pair.Key));
+                target.Add(pair.Key, pair.Value ?? string.Empty);
+            }
+        }
+
+        private static bool IsClassificationProperty(string name)
+        {
+            return string.Equals(name, IsAsset, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, AssetVersion, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, AssemblyVersion, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void Copy(IDictionary<string, string> target, IDictionary<string, string> source, string scope)
@@ -54,6 +85,18 @@ namespace SolidWorksAssetExporter.Core
                 || value.Equals("1", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsRobotClass(IDictionary<string, string> properties)
+        {
+            if (properties == null) return false;
+            foreach (var pair in properties)
+            {
+                if (!string.Equals(pair.Key, AssetClass, StringComparison.OrdinalIgnoreCase)) continue;
+                return string.Equals((pair.Value ?? string.Empty).Trim(), "robot",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            return false;
+        }
+
         public static int RequirePositiveInteger(IDictionary<string, string> properties, string key, string modelName)
         {
             string raw;
@@ -68,15 +111,20 @@ namespace SolidWorksAssetExporter.Core
 
     public static class ModelRules
     {
-        public static void ValidateExportable(ModelDescriptor model)
+        public static void ValidateClassifiable(ModelDescriptor model)
         {
-            if (model == null) throw new ValidationException("组件没有可用的模型文档。");
+            if (model == null) throw new ValidationException("组件没有可用的分类元数据。");
             if (!model.IsSaved || string.IsNullOrWhiteSpace(model.FullPath))
                 throw new ValidationException("模型 [" + (model.FileName ?? "<未命名>") + "] 尚未保存。");
             if (model.IsDirty)
                 throw new ValidationException("模型 [" + model.FileName + "] 存在未保存修改。");
             if (string.IsNullOrWhiteSpace(model.FileName))
                 throw new ValidationException("模型缺少文件名。");
+        }
+
+        public static void ValidateExportable(ModelDescriptor model)
+        {
+            ValidateClassifiable(model);
             if (string.IsNullOrWhiteSpace(model.InternalCreationTime))
                 throw new ValidationException("模型 [" + model.FileName + "] 缺少 SOLIDWORKS 内部创建时间。");
         }
@@ -85,14 +133,14 @@ namespace SolidWorksAssetExporter.Core
     public static class IdentityService
     {
         public static readonly Guid UrlNamespace = new Guid("6ba7b811-9dad-11d1-80b4-00c04fd430c8");
-        private const string AssetPrefix = "urn:solidworks-asset-export:v1:";
+        private const string AssetPrefix = "urn:solidworks-asset-export:v2:";
         private const string AssemblyPrefix = "urn:solidworks-project-assembly:v1:";
         private const string ProjectUnitPrefix = "urn:solidworks-project-unit:v1:";
         private const string NodePrefix = "urn:solidworks-export-node:v1:";
 
         public static Guid AssetUuid(ModelDescriptor model)
         {
-            return Uuid5.Create(UrlNamespace, AssetPrefix + ModelSeed(model));
+            return Uuid5.Create(UrlNamespace, AssetPrefix + AssetIdentitySeed(model));
         }
 
         public static Guid AssemblyUuid(ModelDescriptor model)
@@ -121,6 +169,12 @@ namespace SolidWorksAssetExporter.Core
             if (model == null) throw new ArgumentNullException("model");
             return Canonical.Join(model.FileName, model.InternalCreationTime, model.Configuration,
                 model.DisplayState, model.DocumentKind.ToString());
+        }
+
+        public static string AssetIdentitySeed(ModelDescriptor model)
+        {
+            if (model == null) throw new ArgumentNullException("model");
+            return Canonical.Join(model.InternalCreationTime, model.FileName);
         }
     }
 

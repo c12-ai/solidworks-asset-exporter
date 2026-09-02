@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using SolidWorks.Interop.sldworks;
@@ -20,26 +21,58 @@ namespace SolidWorksAssetExporter.AddIn
 
         public bool ConnectToSW(object thisSw, int cookie)
         {
+            var stage = "initialize";
             try
             {
                 _application = (SldWorks)thisSw; _cookie = cookie;
-                if (!_application.SetAddinCallbackInfo2(0, this, _cookie)) return false;
-                AddCommands(); return true;
+                stage = "SetAddinCallbackInfo2";
+                if (!_application.SetAddinCallbackInfo2(0, this, _cookie))
+                {
+                    WriteDiagnostic("ConnectToSW returned false at " + stage + ".");
+                    return false;
+                }
+                stage = "AddCommands";
+                AddCommands();
+                WriteDiagnostic("ConnectToSW succeeded.");
+                return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("ConnectToSW failed at " + stage + ": " + ex);
+                return false;
+            }
         }
 
         public bool DisconnectFromSW()
         {
+            var stage = "close dialog";
             try
             {
-                if (_dialog != null) { _dialog.Close(); _dialog.Dispose(); _dialog = null; }
+                // FormClosed clears _dialog. Keep a local reference so shutdown never
+                // dereferences the field after Close() has raised that event.
+                var dialog = _dialog;
+                _dialog = null;
+                if (dialog != null)
+                {
+                    dialog.Close();
+                    if (!dialog.IsDisposed) dialog.Dispose();
+                }
+                stage = "remove command group";
                 if (_commands != null) _commands.RemoveCommandGroup2(CommandGroupId, true);
-                if (_commands != null && Marshal.IsComObject(_commands)) Marshal.FinalReleaseComObject(_commands);
-                if (_application != null && Marshal.IsComObject(_application)) Marshal.FinalReleaseComObject(_application);
-                _commands = null; _application = null; return true;
+                // The host owns these RCWs. FinalReleaseComObject can invalidate another
+                // live reference while SOLIDWORKS is shutting down and crash the native process.
+                _commands = null;
+                _application = null;
+                WriteDiagnostic("DisconnectFromSW succeeded.");
+                return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("DisconnectFromSW failed at " + stage + ": " + ex);
+                _commands = null;
+                _application = null;
+                return false;
+            }
         }
 
         public void OnExport()
@@ -67,6 +100,19 @@ namespace SolidWorksAssetExporter.AddIn
             group.HasMenu = true; group.HasToolbar = false; group.Activate();
         }
 
+        private static void WriteDiagnostic(string message)
+        {
+            try
+            {
+                var directory = Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksAssetExporter");
+                Directory.CreateDirectory(directory);
+                File.AppendAllText(Path.Combine(directory, "addin.log"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message + System.Environment.NewLine);
+            }
+            catch { }
+        }
+
         [ComRegisterFunction]
         public static void Register(Type type)
         {
@@ -75,7 +121,7 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 key.SetValue(null, 1, RegistryValueKind.DWord);
                 key.SetValue("Title", "Asset / Project 混合导出");
-                key.SetValue("Description", "按 Asset 边界和最大无 Asset 子树导出 SOLIDWORKS 装配体");
+                key.SetValue("Description", "在 Asset 边界停止，非 Asset 装配递归拆到 Project 叶节点");
             }
             using (var key = Registry.CurrentUser.CreateSubKey(@"Software\SolidWorks\AddInsStartup\" + id))
                 key.SetValue(null, 1, RegistryValueKind.DWord);

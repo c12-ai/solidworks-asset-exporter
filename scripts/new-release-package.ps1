@@ -31,19 +31,27 @@ $payloadFiles = @(
     'SolidWorks.Interop.swconst.dll',
     'SolidWorks.Interop.swpublished.dll'
 )
+$payloadSources = @{}
+$interopDirectory = Join-Path $repoRoot 'third_party\solidworks'
 foreach ($name in $payloadFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $build $name) -PathType Leaf)) {
+    $source = Join-Path $build $name
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf) -and $name.StartsWith('SolidWorks.Interop.')) {
+        $source = Join-Path $interopDirectory $name
+    }
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Build output is missing $name. Run scripts/build-addin.ps1 first."
     }
+    $payloadSources[$name] = $source
 }
 
 if (Test-Path -LiteralPath $packageRoot) { throw "Release package directory already exists: $packageRoot" }
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
 foreach ($name in $payloadFiles) {
-    Copy-Item -LiteralPath (Join-Path $build $name) -Destination $payload
+    Copy-Item -LiteralPath $payloadSources[$name] -Destination $payload
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.cmd') -Destination (Join-Path $packageRoot 'Install.cmd')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination (Join-Path $packageRoot 'Uninstall.cmd')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'set-interactive-user-startup.ps1') -Destination $packageRoot
 
 $archive = Join-Path $output "$packageName.zip"
 if (Test-Path -LiteralPath $archive) { throw "Release archive already exists: $archive" }

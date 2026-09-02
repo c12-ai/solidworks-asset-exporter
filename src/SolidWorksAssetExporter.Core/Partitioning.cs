@@ -15,13 +15,18 @@ namespace SolidWorksAssetExporter.Core
 
         private static ScanNode ScanIncluded(ICadNode node)
         {
-            ModelRules.ValidateExportable(node.Model);
-            var properties = PropertyRules.Merge(node.Model);
+            var classificationSource = node as ICadClassificationSource;
+            var classificationModel = classificationSource == null ? node.Model : classificationSource.ClassificationModel;
+            ModelRules.ValidateClassifiable(classificationModel);
+            var properties = PropertyRules.MergeForClassification(classificationModel);
             var result = new ScanNode { Source = node, Properties = properties };
 
             // This return is deliberately before GetChildren. An Asset is an opaque semantic boundary.
             if (PropertyRules.ReadIsAsset(properties))
             {
+                // Classification metadata already contains the identity seed and the three
+                // semantic properties. Full business metadata is deferred until actual export.
+                ModelRules.ValidateExportable(classificationModel);
                 result.Classification = ScanClassification.AssetBoundary;
                 result.AssetVersion = PropertyRules.RequirePositiveInteger(properties, PropertyRules.AssetVersion, node.Name);
                 return result;
@@ -51,7 +56,9 @@ namespace SolidWorksAssetExporter.Core
         {
             if (root == null || root.Source == null) throw new ArgumentNullException("root");
             var version = PropertyRules.RequirePositiveInteger(root.Properties, PropertyRules.AssemblyVersion, root.Source.Name);
-            var assemblyUuid = IdentityService.AssemblyUuid(root.Source.Model);
+            var assemblyModel = PlanningModel(root.Source);
+            ModelRules.ValidateExportable(assemblyModel);
+            var assemblyUuid = IdentityService.AssemblyUuid(assemblyModel);
             var plan = new AssemblyExportPlan
             {
                 AssemblyUuid = assemblyUuid.ToString("D"),
@@ -59,7 +66,7 @@ namespace SolidWorksAssetExporter.Core
                 MeshFormat = meshFormat
             };
 
-            if (root.Classification == ScanClassification.AssetBoundary || root.Classification == ScanClassification.NoAsset)
+            if (root.Classification == ScanClassification.AssetBoundary || root.Children.Count == 0)
             {
                 plan.Roots.Add(BuildNode(root, null, root.Source.WorldTransform, assemblyUuid, meshFormat));
             }
@@ -67,7 +74,7 @@ namespace SolidWorksAssetExporter.Core
             {
                 var children = root.Children.OrderByDescending(child => child.Source.IsFixed)
                     .ThenBy(child => child.Source.InstancePath ?? string.Empty, StringComparer.OrdinalIgnoreCase).ToList();
-                if (children.Count == 0 || !children.Any(child => child.Source.IsFixed))
+                if (root.Classification == ScanClassification.ContainsAsset && !children.Any(child => child.Source.IsFixed))
                     throw new ValidationException("混合导出的总装配体没有可见、未抑制且非包络的固定顶层组件。");
                 foreach (var child in children)
                     plan.Roots.Add(BuildNode(child, null, root.Source.WorldTransform, assemblyUuid, meshFormat));
@@ -95,15 +102,17 @@ namespace SolidWorksAssetExporter.Core
 
             if (scan.Classification == ScanClassification.AssetBoundary)
             {
-                var assetUuid = IdentityService.AssetUuid(scan.Source.Model);
+                var assetUuid = IdentityService.AssetUuid(PlanningModel(scan.Source));
                 node.Kind = ExportNodeKind.Asset;
                 node.GeometryUuid = assetUuid.ToString("D");
                 node.AssetId = IdentityService.AssetId(assetUuid, scan.AssetVersion.Value);
                 return node;
             }
-            if (scan.Classification == ScanClassification.NoAsset)
+            if (scan.Children.Count == 0)
             {
-                var projectUuid = IdentityService.ProjectUnitUuid(assemblyUuid, scan.Source.Model);
+                var projectModel = PlanningModel(scan.Source);
+                ModelRules.ValidateExportable(projectModel);
+                var projectUuid = IdentityService.ProjectUnitUuid(assemblyUuid, projectModel);
                 node.Kind = ExportNodeKind.Project;
                 node.GeometryUuid = projectUuid.ToString("D");
                 node.MeshFile = string.Format(CultureInfo.InvariantCulture, "meshes/{0}/model.{1}",
@@ -111,10 +120,18 @@ namespace SolidWorksAssetExporter.Core
                 return node;
             }
 
+            // Every non-Asset assembly with included children remains a Group and keeps descending.
+            // Only an Asset is an opaque boundary; Project nodes are non-Asset leaves.
             node.Kind = ExportNodeKind.Group;
             foreach (var child in scan.Children.OrderBy(child => child.Source.InstancePath ?? string.Empty, StringComparer.OrdinalIgnoreCase))
                 node.Children.Add(BuildNode(child, node.Id, world, assemblyUuid, meshFormat));
             return node;
+        }
+
+        private static ModelDescriptor PlanningModel(ICadNode source)
+        {
+            var classificationSource = source as ICadClassificationSource;
+            return classificationSource == null ? source.Model : classificationSource.ClassificationModel;
         }
     }
 

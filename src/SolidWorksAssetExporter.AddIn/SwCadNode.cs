@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Globalization;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -9,29 +8,69 @@ using SolidWorksAssetExporter.Core;
 
 namespace SolidWorksAssetExporter.AddIn
 {
-    public sealed class SwCadNode : ICadNode
+    public sealed class SwCadNode : ICadNode, ICadSourceReference, ICadClassificationSource
     {
+        private static readonly string[] ClassificationPropertyNames =
+            { PropertyRules.IsAsset, PropertyRules.AssetVersion, PropertyRules.AssemblyVersion };
         private readonly Component2 _component;
         private readonly SldWorks _application;
         private readonly bool _isTraversalRoot;
+        private readonly IDictionary<string, ModelDescriptor> _modelCache;
+        private readonly SwPluginMutationTracker _mutationTracker;
         private ModelDescriptor _model;
+        private ModelDescriptor _classificationModel;
 
         public SwCadNode(SldWorks application, Component2 component, string instancePath)
-            : this(application, component, instancePath, false, null)
+            : this(application, component, instancePath, false, null,
+                new Dictionary<string, ModelDescriptor>(StringComparer.OrdinalIgnoreCase),
+                new SwPluginMutationTracker(application))
         {
         }
 
         internal SwCadNode(SldWorks application, Component2 component, string instancePath,
             bool isTraversalRoot, string traversalRootName)
+            : this(application, component, instancePath, isTraversalRoot, traversalRootName,
+                new Dictionary<string, ModelDescriptor>(StringComparer.OrdinalIgnoreCase),
+                new SwPluginMutationTracker(application))
+        {
+        }
+
+        internal SwCadNode(SldWorks application, Component2 component, string instancePath,
+            bool isTraversalRoot, string traversalRootName, SwPluginMutationTracker mutationTracker)
+            : this(application, component, instancePath, isTraversalRoot, traversalRootName,
+                new Dictionary<string, ModelDescriptor>(StringComparer.OrdinalIgnoreCase), mutationTracker)
+        {
+        }
+
+        private SwCadNode(SldWorks application, Component2 component, string instancePath,
+            bool isTraversalRoot, string traversalRootName, IDictionary<string, ModelDescriptor> modelCache,
+            SwPluginMutationTracker mutationTracker)
         {
             _application = application; _component = component;
             _isTraversalRoot = isTraversalRoot;
+            _modelCache = modelCache;
+            _mutationTracker = mutationTracker ?? new SwPluginMutationTracker(application);
             Name = isTraversalRoot ? traversalRootName : (component == null ? "<root>" : component.Name2);
             InstanceId = isTraversalRoot || component == null ? "root" : component.GetID().ToString();
             InstancePath = instancePath ?? "/";
         }
 
         public Component2 Component { get { return _component; } }
+        public string ReferencedConfiguration
+        {
+            get
+            {
+                if (_isTraversalRoot || _component == null)
+                {
+                    var document = _application.ActiveDoc as ModelDoc2;
+                    var configuration = document == null || document.ConfigurationManager == null
+                        ? null : document.ConfigurationManager.ActiveConfiguration;
+                    return configuration == null ? string.Empty : configuration.Name;
+                }
+                try { return Convert.ToString(((dynamic)_component).ReferencedConfiguration) ?? string.Empty; }
+                catch { return string.Empty; }
+            }
+        }
         public ModelDoc2 Document
         {
             get
@@ -44,6 +83,47 @@ namespace SolidWorksAssetExporter.AddIn
             }
         }
 
+        public SwModelDocumentLease OpenDocument()
+        {
+            if (_application == null) throw new ValidationException("没有可用的 SOLIDWORKS 应用程序实例。");
+            if (_isTraversalRoot || _component == null)
+            {
+                var active = _application.ActiveDoc as ModelDoc2;
+                if (active == null) throw new ValidationException("当前没有活动的 SOLIDWORKS 模型文档。");
+                return SwModelDocumentLease.Borrow(_application, active);
+            }
+            var componentPath = _component.GetPathName();
+            var loaded = _component.GetModelDoc2() as ModelDoc2;
+            if (IsEmbeddedSessionComponent(_component, componentPath))
+                return SwModelDocumentLease.ResolveComponent(_application, _component, _mutationTracker);
+            // A resolved/flexible component can occasionally expose its owning assembly through
+            // GetModelDoc2. Never borrow that document for an external component: Pack and Go on
+            // it would enumerate the entire parent assembly instead of this component boundary.
+            if (loaded != null && DocumentMatchesPath(loaded, componentPath))
+                return SwModelDocumentLease.Borrow(_application, loaded);
+            return SwModelDocumentLease.Open(_application, componentPath, ReferencedConfiguration);
+        }
+
+        private static bool DocumentMatchesPath(ModelDoc2 document, string expectedPath)
+        {
+            if (document == null || string.IsNullOrWhiteSpace(expectedPath)) return false;
+            try
+            {
+                var actualPath = document.GetPathName();
+                return !string.IsNullOrWhiteSpace(actualPath) && string.Equals(
+                    Path.GetFullPath(actualPath), Path.GetFullPath(expectedPath),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        private static bool IsEmbeddedSessionComponent(Component2 component, string path)
+        {
+            try { if (component != null && component.IsVirtual) return true; }
+            catch { }
+            return AssetSourcePathPolicy.IsSessionEmbeddedModelPath(path);
+        }
+
         public string InstanceId { get; private set; }
         public string Name { get; private set; }
         public string InstancePath { get; private set; }
@@ -52,6 +132,30 @@ namespace SolidWorksAssetExporter.AddIn
         public bool IsEnvelope { get { return !_isTraversalRoot && _component != null && _component.IsEnvelope(); } }
         public bool IsFixed { get { return !_isTraversalRoot && _component != null && _component.IsFixed(); } }
         public ModelDescriptor Model { get { return _model ?? (_model = ReadModel()); } }
+        public ModelDescriptor ClassificationModel
+        {
+            get { return _classificationModel ?? (_classificationModel = ReadClassificationModel()); }
+        }
+        public string SourcePath
+        {
+            get
+            {
+                if (!_isTraversalRoot && _component != null) return _component.GetPathName() ?? string.Empty;
+                var document = _application == null ? null : _application.ActiveDoc as ModelDoc2;
+                return document == null ? string.Empty : document.GetPathName();
+            }
+        }
+        public DocumentKind SourceDocumentKind
+        {
+            get
+            {
+                var extension = Path.GetExtension(SourcePath);
+                if (string.Equals(extension, ".SLDPRT", StringComparison.OrdinalIgnoreCase)) return DocumentKind.Part;
+                if (string.Equals(extension, ".SLDASM", StringComparison.OrdinalIgnoreCase)) return DocumentKind.Assembly;
+                if (string.Equals(extension, ".SLDDRW", StringComparison.OrdinalIgnoreCase)) return DocumentKind.Drawing;
+                return DocumentKind.Unknown;
+            }
+        }
 
         public Matrix4 WorldTransform
         {
@@ -85,31 +189,115 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var value in children)
             {
                 var child = value as Component2;
-                if (child != null) yield return new SwCadNode(_application, child, InstancePath + "/" + child.Name2);
+                if (child != null) yield return new SwCadNode(_application, child, InstancePath + "/" + child.Name2,
+                    false, null, _modelCache, _mutationTracker);
             }
         }
 
         private ModelDescriptor ReadModel()
         {
-            var document = Document;
-            var path = document.GetPathName();
-            var activeConfiguration = document.ConfigurationManager.ActiveConfiguration;
-            var configuration = activeConfiguration.Name;
-            var displayState = ReadDisplayState(activeConfiguration);
-            var descriptor = new ModelDescriptor
+            var requestedPath = _isTraversalRoot || _component == null
+                ? ((_application.ActiveDoc as ModelDoc2) == null ? string.Empty : ((ModelDoc2)_application.ActiveDoc).GetPathName())
+                : _component.GetPathName();
+            var requestedConfiguration = ReferencedConfiguration;
+            var requestedDisplayState = ReferencedDisplayState();
+            var cacheKey = Canonical.Join(requestedPath, requestedConfiguration, requestedDisplayState);
+            ModelDescriptor cached;
+            if (_modelCache.TryGetValue(cacheKey, out cached)) return cached;
+
+            using (var lease = OpenDocument())
             {
-                FullPath = path,
-                FileName = Path.GetFileName(path),
-                InternalCreationTime = NormalizeCreationTime(Convert.ToString(document.get_SummaryInfo((int)swSummInfoField_e.swSumInfoCreateDate))),
-                Configuration = configuration ?? string.Empty,
-                DisplayState = displayState,
-                DocumentKind = ToDocumentKind(document.GetType()),
-                IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
-                IsDirty = document.GetSaveFlag(),
-                FileProperties = ReadProperties(((dynamic)document.Extension).CustomPropertyManager[string.Empty]),
-                ConfigurationProperties = ReadProperties(((dynamic)document.Extension).CustomPropertyManager[configuration ?? string.Empty])
-            };
-            return descriptor;
+                var document = lease.Document;
+                var path = document.GetPathName();
+                var activeConfiguration = document.ConfigurationManager == null ? null : document.ConfigurationManager.ActiveConfiguration;
+                var configuration = string.IsNullOrWhiteSpace(requestedConfiguration)
+                    ? (activeConfiguration == null ? string.Empty : activeConfiguration.Name)
+                    : requestedConfiguration;
+                var displayState = string.IsNullOrWhiteSpace(requestedDisplayState)
+                    ? ReadDisplayState(activeConfiguration) : requestedDisplayState;
+                var descriptor = new ModelDescriptor
+                {
+                    FullPath = path,
+                    FileName = Path.GetFileName(path),
+                    InternalCreationTime = NormalizeCreationTime(Convert.ToString(document.get_SummaryInfo((int)swSummInfoField_e.swSumInfoCreateDate))),
+                    Configuration = configuration ?? string.Empty,
+                    DisplayState = displayState,
+                    DocumentKind = ToDocumentKind(document.GetType()),
+                    IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
+                    IsDirty = _mutationTracker.IsDirty(document, lease.OpenedHere, path),
+                    FileProperties = ReadNodeProperties(document, string.Empty),
+                    ConfigurationProperties = ReadNodeProperties(document, configuration ?? string.Empty)
+                };
+                _modelCache[cacheKey] = descriptor;
+                return descriptor;
+            }
+        }
+
+        private ModelDescriptor ReadClassificationModel()
+        {
+            var path = SourcePath;
+            var requestedConfiguration = ReferencedConfiguration;
+            var displayState = ReferencedDisplayState();
+            var cacheKey = "classification|" + Canonical.Join(path, requestedConfiguration);
+            ModelDescriptor cached;
+            if (_modelCache.TryGetValue(cacheKey, out cached)) return cached;
+
+            // IComponent2.CustomPropertyManager only exposes configuration-specific properties.
+            // The Asset flag used by the property-tab template is a file-level property, so it
+            // must be read through the referenced model's ModelDocExtension. Lightweight models
+            // are opened invisibly one at a time and immediately closed by this lease.
+            using (var lease = OpenDocument())
+            {
+                var document = lease.Document;
+                var activeConfiguration = document.ConfigurationManager == null
+                    ? null : document.ConfigurationManager.ActiveConfiguration;
+                var configuration = string.IsNullOrWhiteSpace(requestedConfiguration)
+                    ? (activeConfiguration == null ? string.Empty : activeConfiguration.Name)
+                    : requestedConfiguration;
+                var descriptor = new ModelDescriptor
+                {
+                    FullPath = path,
+                    FileName = Path.GetFileName(path),
+                    InternalCreationTime = NormalizeCreationTime(Convert.ToString(
+                        document.get_SummaryInfo((int)swSummInfoField_e.swSumInfoCreateDate))),
+                    Configuration = configuration ?? string.Empty,
+                    DisplayState = displayState,
+                    DocumentKind = SourceDocumentKind,
+                    IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
+                    IsDirty = _mutationTracker.IsDirty(document, lease.OpenedHere, path),
+                    FileProperties = ReadClassificationProperties(document, string.Empty, true),
+                    ConfigurationProperties = ReadClassificationProperties(document, configuration ?? string.Empty, true)
+                };
+                _modelCache[cacheKey] = descriptor;
+                return descriptor;
+            }
+        }
+
+        private IDictionary<string, string> ReadClassificationProperties(
+            ModelDoc2 document, string configuration, bool useCached)
+        {
+            if (document == null)
+                throw new ValidationException("组件没有可用于分类的模型引用：" + Name);
+            return ReadClassificationPropertyValues(
+                ((dynamic)document.Extension).CustomPropertyManager[configuration], useCached);
+        }
+
+        private string ReferencedDisplayState()
+        {
+            if (_isTraversalRoot || _component == null) return string.Empty;
+            try { return Convert.ToString(((dynamic)_component).ReferencedDisplayState) ?? string.Empty; }
+            catch { return string.Empty; }
+        }
+
+        private IDictionary<string, string> ReadNodeProperties(ModelDoc2 document, string configuration)
+        {
+            if (document == null)
+                throw new ValidationException("组件没有可用于读取属性的模型引用：" + Name);
+            // Component2.CustomPropertyManager is configuration-specific and cannot represent
+            // file-level properties. Use the model document for both scopes. Cached reads avoid
+            // activating other configurations and marking virtual component documents dirty.
+            return ReadProperties(
+                ((dynamic)document.Extension).CustomPropertyManager[configuration], true);
         }
 
         private static string ReadDisplayState(Configuration configuration)
@@ -131,7 +319,23 @@ namespace SolidWorksAssetExporter.AddIn
             return (raw ?? string.Empty).Trim();
         }
 
-        private static IDictionary<string, string> ReadProperties(CustomPropertyManager manager)
+        private static IDictionary<string, string> ReadClassificationPropertyValues(
+            CustomPropertyManager manager, bool useCached)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (manager == null) return result;
+            foreach (var name in ClassificationPropertyNames)
+            {
+                string raw, resolved; bool wasResolved, linked;
+                var status = manager.Get6(name, useCached, out raw, out resolved, out wasResolved, out linked);
+                if (status == (int)swCustomInfoGetResult_e.swCustomInfoGetResult_NotPresent) continue;
+                result.Add(name, wasResolved && !string.IsNullOrEmpty(resolved) ? resolved : (raw ?? string.Empty));
+            }
+            return result;
+        }
+
+        private static IDictionary<string, string> ReadProperties(
+            CustomPropertyManager manager, bool useCached)
         {
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var names = manager == null ? null : manager.GetNames() as string[];
@@ -139,7 +343,7 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var name in names)
             {
                 string raw, resolved; bool wasResolved, linked;
-                manager.Get6(name, false, out raw, out resolved, out wasResolved, out linked);
+                manager.Get6(name, useCached, out raw, out resolved, out wasResolved, out linked);
                 result.Add(name, wasResolved && !string.IsNullOrEmpty(resolved) ? resolved : (raw ?? string.Empty));
             }
             return result;
@@ -158,32 +362,24 @@ namespace SolidWorksAssetExporter.AddIn
     {
         public static SwCadNode FromActiveDocument(SldWorks application)
         {
+            return FromActiveDocument(application, new SwPluginMutationTracker(application));
+        }
+
+        public static SwCadNode FromActiveDocument(SldWorks application, SwPluginMutationTracker mutationTracker)
+        {
             var document = application.ActiveDoc as ModelDoc2;
             if (document == null || document.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
                 throw new ValidationException("请先打开一个 SOLIDWORKS 装配体。");
-            ResolveLightweightComponents(document);
             var configuration = document.ConfigurationManager.ActiveConfiguration;
-            var component = configuration.GetRootComponent3(true);
+            var component = configuration.GetRootComponent3(false);
             if (component == null) throw new ValidationException("活动配置没有可用的根组件。");
             var rootName = Path.GetFileNameWithoutExtension(document.GetPathName());
             if (string.IsNullOrWhiteSpace(rootName))
                 rootName = Path.GetFileNameWithoutExtension(document.GetTitle());
             if (string.IsNullOrWhiteSpace(rootName)) rootName = "<root>";
-            return new SwCadNode(application, component, "/" + rootName, true, rootName);
+            return new SwCadNode(application, component, "/" + rootName, true, rootName, mutationTracker);
         }
 
-        private static void ResolveLightweightComponents(ModelDoc2 document)
-        {
-            var assembly = document as AssemblyDoc;
-            if (assembly == null) throw new ValidationException("活动文档无法作为装配体访问。");
-            var count = assembly.GetLightWeightComponentCount();
-            if (count <= 0) return;
-            var status = assembly.ResolveAllLightWeightComponents(false);
-            var remaining = assembly.GetLightWeightComponentCount();
-            if (status != (int)swComponentResolveStatus_e.swResolveOk || remaining != 0)
-                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                    "无法完全解析轻化组件：请求解析 {0} 个，仍有 {1} 个；status={2}。", count, remaining, status));
-        }
     }
 
     internal static class SwComponentState
