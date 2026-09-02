@@ -67,6 +67,10 @@ asset_version = 1          # 必填正整数
 | `accepts_interface` | 文本列表 | Fixture 可以接受的物料接口；多个接口使用英文分号 `;` 分隔。接口名称由团队人工约定，相同接口应复用已有名称。 |
 | `is_placement_required` | 布尔值 | 当前 Asset 是否必须安装或放置在另一个 Asset 上才能使用。 |
 | `placement_interface` | 文本 | 当前 Asset 自己提供的放置接口，接口类型与 Fixture 的 `accepts_interface` 使用同一套人工约定名称，例如 `50ML_tube`。 |
+| `has_QRcode` | 布尔值 | 当前 Asset 是否需要二维码标识。Property Tab Builder 模板使用 `1`/`0`；选中后显示二维码数量、尺寸和间距字段。 |
+| `QR_num` | 非负整数 | 当前 Asset 上的二维码数量。没有二维码时填写 `0`；启用 `has_QRcode` 时应填写大于 `0` 的数量。 |
+| `QR_size` | 文本 | 单个二维码的实体尺寸，通常指正方形边长。当前模板没有规定单位或格式，项目内必须统一约定并保持一致。 |
+| `QR_spacing` | 非负数 | 多个二维码之间的间距。当前模板没有规定长度单位，也没有规定按边缘还是中心测量，项目内必须统一约定；只有一个二维码时填写 `0`。 |
 | `slots_num` | 非负整数 | 当前 Asset 可提供的安装槽位、工位或容纳位置数量；`0` 表示不提供槽位。 |
 | `is_adjustable` | 布尔值 | Asset 的安装位姿或空间布局位置是否允许调整。`moveable` 通常不可调，`structure` 可以根据布局需要设为可调。 |
 | `asset_version` | 正整数 | Asset 内容版本，从 `1` 开始。源模型、图纸或关键内容改变时必须提升版本，不能覆盖已经发布的同版本 Asset。 |
@@ -82,6 +86,14 @@ asset_version = 1          # 必填正整数
 - `structure`：不定义交互 Point，也不与机器人直接交互的结构；可以设置 `is_adjustable=true`，表示其空间布局位置允许调整。
 
 以上属性只描述机械工程师在设计阶段能够直接确定的 Asset 分类和治具关系。Position、Area、抓取 Point、TCP Point、设备交互 Point 等空间定义不在当前 Property Tab 中填写，后续直接定义在资产数据中。
+
+二维码字段目前只作为 Asset 自定义属性写入 manifest。插件不会生成二维码内容、二维码图片或打印文件，也不会校验 `QR_num`、`QR_size`、`QR_spacing` 之间的业务关系。填写时建议遵循以下约定：
+
+- `has_QRcode=0`：`QR_num=0`、`QR_spacing=0`，`QR_size` 留空。
+- `has_QRcode=1`：`QR_num` 填写大于 `0` 的数量，并填写 `QR_size`；数量大于 `1` 时再按项目统一口径填写 `QR_spacing`。
+- 尺寸和间距的单位、测量基准必须由项目统一约定；当前模板和导出程序不会自动换算。
+
+> **零件模板兼容性说明：** `templates/custom-properties/part.prtprp` 中可见标签是 `QR_num`，但当前 `v1.0.3` 模板实际写入的自定义属性名是 `号数30`；`templates/custom-properties/asem.asmprp` 才写入 `QR_num`。因此零件 Asset 的 manifest 会保留 `号数30`，不会自动重命名为 `QR_num`。
 
 条件填写约定：
 
@@ -112,12 +124,37 @@ Asset 的 `content_fingerprint` 分两层计算：先对 Asset 根模型及其�
 
 绝对目录、Asset 在父装配体中的实例位姿/配合、父装配体边界外的修改、上传地址和注册表时间戳不参与 Asset 内容指纹；非 Robot 生成后的 STEP/STL 也不是源内容指纹的输入，但 manifest 会另外校验所有导出文件的大小和 SHA-256，缺失或被改动仍不能复用。Robot manifest 没有文件清单，但仍使用源设计内容指纹判断版本。同一 UUID 和 `asset_version` 已存在但内容指纹不同，插件不会自动覆盖或自动改版本，必须手动增加正整数 `asset_version`。
 
+### Property Tab Builder 模板与属性同步工具
+
+仓库提供以下模板：
+
+- `templates/custom-properties/part.prtprp`：零件。
+- `templates/custom-properties/asem.asmprp`：装配体。
+- `templates/custom-properties/draw.drwprp`：工程图。
+
+`scripts/custom-properties.schema.csv` 是属性预览/同步脚本及 VBA 宏使用的保留字段清单。正式应用时会删除文件级中未列入 CSV 的属性；当前 `v1.0.3` 默认 CSV 尚未包含二维码字段。需要保留现有二维码属性时，应先按当前模板的实际属性名补充：
+
+```csv
+All,has_QRcode,0
+Assembly,QR_num,0
+Part,号数30,0
+All,QR_size,
+All,QR_spacing,0
+```
+
+先运行只读预览并检查删除/新增清单，再决定是否应用：
+
+- PowerShell 入口：`scripts/Preview-CustomProperties.cmd`。
+- VBA 预览宏：`macros/PreviewCustomProperties.swb` 或 `macros/PreviewCustomProperties.bas`。
+- VBA 应用宏：`macros/ApplyCustomProperties.bas`。应用前会检查文件状态并创建备份，但仍应人工确认预览结果。
+
 ## 输出
 
 “Asset 本地输出根目录”保存可跨 Project 复用的 Asset 版本包；“Project 本地输出根目录”保存当前总装配体的 XML、Project STEP/STL 和导出报告。两者必须分开，防止全局 Asset 库与一次性 Project 结果互相覆盖。即使启用 Wanxiang 上传，插件也会先在这两个目录完成可校验、可恢复的本地事务导出，成功后再上传，因此目前仍需要同时设置两个根目录。
 
 ```text
 asset-library/
+  asset-registry.json
   <asset-uuid>/v<asset-version>/
     asset_<uuid>_v<version>.json
     # 非 Robot 还包含：
