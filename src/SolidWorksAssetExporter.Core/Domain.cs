@@ -47,6 +47,19 @@ namespace SolidWorksAssetExporter.Core
         IEnumerable<ICadNode> GetChildren();
     }
 
+    // Allows source packaging to inspect referenced file paths without loading full model metadata.
+    public interface ICadSourceReference
+    {
+        string SourcePath { get; }
+        DocumentKind SourceDocumentKind { get; }
+    }
+
+    // Supplies the small metadata subset needed by classification without opening a full model document.
+    public interface ICadClassificationSource
+    {
+        ModelDescriptor ClassificationModel { get; }
+    }
+
     public sealed class ScanNode
     {
         public ScanNode()

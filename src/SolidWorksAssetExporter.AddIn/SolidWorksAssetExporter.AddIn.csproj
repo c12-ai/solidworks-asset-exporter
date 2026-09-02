@@ -24,7 +24,9 @@
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
     <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Net.Http" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="Microsoft.CSharp" />
@@ -44,12 +46,18 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FileFingerprintCache.cs" />
+    <Compile Include="ExportSourceSnapshot.cs" />
     <Compile Include="ExportCoordinator.cs" />
     <Compile Include="ExportDialog.cs" />
     <Compile Include="Settings.cs" />
     <Compile Include="SwAddin.cs" />
     <Compile Include="SwCadNode.cs" />
+    <Compile Include="SwDocumentWindowScope.cs" />
     <Compile Include="SwExportServices.cs" />
+    <Compile Include="WanxiangDataClient.cs" />
+    <Compile Include="WanxiangExportUploader.cs" />
+    <Compile Include="WanxiangRegistryProvider.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup Condition=" '$(UseSolidWorksStubs)' == 'true' ">

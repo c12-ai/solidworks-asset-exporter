@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -109,18 +107,24 @@ namespace SolidWorksAssetExporter.AddIn
     public sealed class SwGeometryExporter
     {
         private readonly SldWorks _app;
-        public SwGeometryExporter(SldWorks app) { _app = app; }
+        private readonly SwPluginMutationTracker _mutationTracker;
+        public SwGeometryExporter(SldWorks app, SwPluginMutationTracker mutationTracker)
+        {
+            _app = app; _mutationTracker = mutationTracker;
+        }
 
         public void ExportBoth(SwCadNode node, string destinationDirectory)
         {
             Directory.CreateDirectory(destinationDirectory);
-            using (new SwActiveDocumentScope(_app, node.Document))
-            using (new SwSelectionScope(node.Document))
+            using (var lease = node.OpenDocument())
+            using (new SwActiveDocumentScope(_app, lease.Document, !lease.OpenedHere))
+            using (new SwReferencedConfigurationScope(lease.Document, node.ReferencedConfiguration, _mutationTracker))
+            using (new SwSelectionScope(lease.Document))
             {
-                SelectVisibleGeometry(node.Document);
-                Save(node.Document, Path.Combine(destinationDirectory, "model.step"));
-                SelectVisibleGeometry(node.Document);
-                Save(node.Document, Path.Combine(destinationDirectory, "model.stl"));
+                SelectVisibleGeometry(lease.Document);
+                Save(lease.Document, Path.Combine(destinationDirectory, "model.step"));
+                SelectVisibleGeometry(lease.Document);
+                Save(lease.Document, Path.Combine(destinationDirectory, "model.stl"));
             }
         }
 
@@ -128,7 +132,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             document.ClearSelection2(true);
             if (document.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY) return;
-            var root = document.ConfigurationManager.ActiveConfiguration.GetRootComponent3(true);
+            var root = document.ConfigurationManager.ActiveConfiguration.GetRootComponent3(false);
             if (root == null) throw new ValidationException("活动子装配配置缺少根组件。");
             var selected = SelectVisibleLeaves(root);
             if (selected == 0) throw new ValidationException("装配体没有可导出的可见、未抑制、非包络实体组件：" + document.GetTitle());
@@ -139,14 +143,13 @@ namespace SolidWorksAssetExporter.AddIn
             var children = parent.GetChildren() as object[];
             if (children == null || children.Length == 0)
             {
-                var model = parent.GetModelDoc2() as ModelDoc2;
-                if (model == null) throw new ValidationException("可见组件未解析或未加载：" + parent.Name2);
-                if (model.GetType() == (int)swDocumentTypes_e.swDocPART)
+                var extension = Path.GetExtension(parent.GetPathName());
+                if (string.Equals(extension, ".SLDPRT", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!parent.Select4(true, null, false)) throw new ValidationException("无法选择可见组件用于几何导出：" + parent.Name2);
                     return 1;
                 }
-                throw new ValidationException("可见子装配体没有可遍历组件，请先完全解析：" + parent.Name2);
+                throw new ValidationException("可见子装配体没有可遍历组件：" + parent.Name2);
             }
             var count = 0;
             foreach (var value in children)
@@ -169,39 +172,14 @@ namespace SolidWorksAssetExporter.AddIn
         }
     }
 
-    public sealed class SwActiveDocumentScope : IDisposable
-    {
-        private readonly SldWorks _app;
-        private readonly string _originalTitle;
-        private readonly string _targetTitle;
-
-        public SwActiveDocumentScope(SldWorks app, ModelDoc2 target)
-        {
-            _app = app;
-            var original = app.ActiveDoc as ModelDoc2;
-            _originalTitle = original == null ? string.Empty : original.GetTitle();
-            _targetTitle = target.GetTitle();
-            if (!string.Equals(_originalTitle, _targetTitle, StringComparison.OrdinalIgnoreCase)) Activate(_targetTitle);
-        }
-
-        public void Dispose()
-        {
-            if (!string.IsNullOrWhiteSpace(_originalTitle) && !string.Equals(_originalTitle, _targetTitle, StringComparison.OrdinalIgnoreCase))
-                Activate(_originalTitle);
-        }
-
-        private void Activate(string title)
-        {
-            int errors = 0;
-            var document = _app.ActivateDoc3(title, false, (int)swRebuildOnActivation_e.swDontRebuildActiveDoc, ref errors) as ModelDoc2;
-            if (document == null || errors != 0) throw new ValidationException("无法无重建地激活模型文档：" + title + "; errors=" + errors);
-        }
-    }
-
     public sealed class SwSourcePackager
     {
         private readonly SldWorks _app;
-        public SwSourcePackager(SldWorks app) { _app = app; }
+        private readonly SwPluginMutationTracker _mutationTracker;
+        public SwSourcePackager(SldWorks app, SwPluginMutationTracker mutationTracker)
+        {
+            _app = app; _mutationTracker = mutationTracker;
+        }
 
         public IList<string> AssetModelFiles(SwCadNode node)
         {
@@ -211,53 +189,78 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 if (!File.Exists(file)) throw new ValidationException("Asset 源模型文件不存在：" + file);
                 var open = _app.GetOpenDocumentByName(file) as ModelDoc2;
-                if (open != null && open.GetSaveFlag()) throw new ValidationException("Asset 层级模型存在未保存修改：" + file);
+                if (open != null && _mutationTracker.IsDirty(open, false, file))
+                    throw new ValidationException("Asset 层级模型存在未保存修改：" + file);
             }
             return files;
         }
 
-        public IList<string> DependencyFiles(ModelDoc2 document)
-        {
-            var packAndGo = document.Extension.GetPackAndGo();
-            packAndGo.IncludeDrawings = false;
-            packAndGo.IncludeSuppressed = true;
-            object namesObject;
-            if (!packAndGo.GetDocumentNames(out namesObject)) throw new ValidationException("Pack and Go 无法读取模型依赖。");
-            var names = namesObject as object[];
-            var files = names == null ? new List<string>() : names.Select(value => Convert.ToString(value, CultureInfo.InvariantCulture))
-                .Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (File.Exists(document.GetPathName()) && !files.Contains(document.GetPathName(), StringComparer.OrdinalIgnoreCase)) files.Add(document.GetPathName());
-            foreach (var file in files)
-            {
-                var open = _app == null ? null : _app.GetOpenDocumentByName(file) as ModelDoc2;
-                if (open != null && open.GetSaveFlag()) throw new ValidationException("依赖模型存在未保存修改：" + file);
-            }
-            return files.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
-        }
-
         public string ContentFingerprint(SwCadNode node)
         {
-            var entries = DependencyFiles(node.Document).Select(path =>
-                Canonical.Join(Path.GetFileName(path), new FileInfo(path).Length.ToString(CultureInfo.InvariantCulture), FileHash.Sha256(path)));
-            return FileHash.Sha256Text(Canonical.Join(IdentityService.ModelSeed(node.Model), string.Join("\n", entries)));
+            return ContentFingerprint(node, FileHash.Sha256);
+        }
+
+        public string ContentFingerprint(SwCadNode node, Func<string, string> hashFile)
+        {
+            if (node == null) throw new ArgumentNullException("node");
+            if (hashFile == null) throw new ArgumentNullException("hashFile");
+            // Project units never use Pack and Go. A classified Project node is a terminal
+            // non-Asset unit, so its fingerprint is based directly on its own saved source
+            // document, whether that document is a part or an assembly. Pack and Go remains
+            // reserved exclusively for assembly Assets in PackAsset below.
+            var path = Path.GetFullPath(node.SourcePath);
+            if (!File.Exists(path)) throw new ValidationException("Project 源模型文件不存在：" + path);
+            var open = _app == null ? null : _app.GetOpenDocumentByName(path) as ModelDoc2;
+            if (open != null && _mutationTracker.IsDirty(open, false, path))
+                throw new ValidationException("Project 源模型存在未保存修改：" + path);
+            var entry = Canonical.Join(Path.GetFileName(path),
+                new FileInfo(path).Length.ToString(CultureInfo.InvariantCulture), hashFile(path));
+            return FileHash.Sha256Text(Canonical.Join(
+                IdentityService.ModelSeed(node.ClassificationModel), entry));
         }
 
         public void PackAsset(SwCadNode node, IEnumerable<string> modelFiles, string destinationDirectory)
         {
             Directory.CreateDirectory(destinationDirectory);
+            if (AssetSourcePathPolicy.IsSessionEmbeddedModelPath(node.SourcePath))
+                throw new ValidationException("Asset 根是 SOLIDWORKS 虚拟/内嵌组件，无法生成独立可复用的源模型包。" +
+                    "请先在 SOLIDWORKS 中将该 Asset 根保存为外部 SLDASM/SLDPRT 文件，然后重新预览。");
             var files = (modelFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (files.Count == 0) throw new ValidationException("Asset 没有可打包的源模型文件。");
-            if (node.Model.DocumentKind == DocumentKind.Part)
+            if (node.SourceDocumentKind == DocumentKind.Part)
             {
                 if (files.Count != 1) throw new ValidationException("零件 Asset 只能包含自身源模型。");
                 File.Copy(files[0], Path.Combine(destinationDirectory, Path.GetFileName(files[0])), false);
                 return;
             }
-            if (node.Model.DocumentKind != DocumentKind.Assembly)
-                throw new ValidationException("不支持的 Asset 模型类型：" + node.Model.DocumentKind);
+            if (node.SourceDocumentKind != DocumentKind.Assembly)
+                throw new ValidationException("不支持的 Asset 模型类型：" + node.SourceDocumentKind);
 
-            PackAssembly(node.Document, files, destinationDirectory);
+            using (var lease = node.OpenDocument())
+            using (new SwActiveDocumentScope(_app, lease.Document, !lease.OpenedHere))
+            using (new SwReferencedConfigurationScope(lease.Document, node.ReferencedConfiguration, _mutationTracker))
+            {
+                EnsureAssetRootDocument(lease.Document, node.SourcePath);
+                EnsureAssetRootDocument(_app.ActiveDoc as ModelDoc2, node.SourcePath);
+                PackAssembly(lease.Document, files, destinationDirectory);
+            }
+        }
+
+        private static void EnsureAssetRootDocument(ModelDoc2 document, string expectedPath)
+        {
+            if (document == null) throw new ValidationException("Asset 根模型文档为空。");
+            string actualPath;
+            try { actualPath = document.GetPathName(); }
+            catch (Exception ex)
+            {
+                throw new ValidationException("无法读取 Asset 根模型文档路径：" + ex.Message);
+            }
+            if (string.IsNullOrWhiteSpace(expectedPath) || string.IsNullOrWhiteSpace(actualPath) ||
+                !string.Equals(Path.GetFullPath(expectedPath), Path.GetFullPath(actualPath),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new ValidationException("Asset 打包文档与 Asset 根模型不一致，已停止以避免把父装配体装入 Asset。" +
+                    "\r\nAsset 根：" + expectedPath + "\r\n当前文档：" + actualPath);
         }
 
         private static void PackAssembly(ModelDoc2 document, IList<string> allowedFiles, string destinationDirectory)
@@ -275,49 +278,108 @@ namespace SolidWorksAssetExporter.AddIn
             var allowed = new HashSet<string>(allowedFiles.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
             var packaged = new HashSet<string>(originalNames.Where(path => !string.IsNullOrWhiteSpace(path)).Select(Path.GetFullPath),
                 StringComparer.OrdinalIgnoreCase);
-            var missing = allowed.Where(path => !packaged.Contains(path)).ToList();
+            // IC~~/VC~~ models are stored inside their owning SLDASM. SOLIDWORKS exposes
+            // temporary paths for inspection, but Pack and Go correctly omits those paths
+            // from GetDocumentNames because there is no independent source file to copy.
+            var missing = AssetSourcePathPolicy.MissingExternalFiles(allowed, packaged);
             if (missing.Count != 0)
-                throw new ValidationException("Pack and Go 未发现 Asset 层级模型：" + string.Join("; ", missing));
+                throw new ValidationException("Pack and Go 未发现 Asset 层级模型：" + SummarizePaths(missing));
+            if (originalNames.Any(string.IsNullOrWhiteSpace))
+                throw new ValidationException("Pack and Go 返回了空的源文件名。");
+            var included = originalNames.Select((path, index) => new
+                {
+                    OriginalName = path,
+                    FullPath = Path.GetFullPath(path),
+                    Index = index
+                })
+                .Where(item => allowed.Contains(item.FullPath) &&
+                    !AssetSourcePathPolicy.IsSessionEmbeddedModelPath(item.FullPath)).ToList();
+            var duplicateNames = originalNames.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1 && group.Any(path => allowed.Contains(Path.GetFullPath(path))))
+                .Select(group => group.Key).ToList();
+            if (duplicateNames.Count != 0)
+                throw new ValidationException("Pack and Go 扁平打包时 Asset 文件与其他依赖重名：" +
+                    string.Join("; ", duplicateNames));
 
-            var destinations = BuildDestinationNames(allowedFiles, destinationDirectory);
-            var saveNames = new string[originalNames.Count];
-            for (var i = 0; i < originalNames.Count; i++)
+            // Some SOLIDWORKS sessions reject SetDocumentSaveToNames even when the official
+            // same-length empty-entry removal contract is followed. Isolate the complete Pack
+            // and Go result inside this export transaction, then promote only files explicitly
+            // collected from the Asset subtree. Context references never reach source/, the
+            // manifest, or the remote archive.
+            var workingDirectory = Path.Combine(Path.GetDirectoryName(destinationDirectory),
+                ".pack-and-go-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workingDirectory);
+            try
             {
-                string destination;
-                saveNames[i] = destinations.TryGetValue(Path.GetFullPath(originalNames[i]), out destination) ? destination : string.Empty;
+                var workingRoot = workingDirectory.TrimEnd(Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (!packAndGo.SetSaveToName2(true, workingRoot))
+                    throw new ValidationException("Pack and Go 无法设置隔离输出目录。");
+                object saveNamesObject, documentStatusesObject;
+                if (!packAndGo.GetDocumentSaveToNames(out saveNamesObject, out documentStatusesObject))
+                    throw new ValidationException("Pack and Go 无法读取实际输出文件名。");
+                var saveNames = ToStrings(saveNamesObject);
+                if (saveNames.Count != originalNames.Count)
+                    throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                        "Pack and Go 实际输出清单数量异常：原始清单 {0}，输出清单 {1}。",
+                        originalNames.Count, saveNames.Count));
+                var includedOutputs = included.Select(item => new
+                    {
+                        item.OriginalName,
+                        SavePath = ResolvePackAndGoOutputPath(saveNames[item.Index], workingDirectory)
+                    }).ToList();
+                var duplicateOutputs = includedOutputs.GroupBy(item => Path.GetFileName(item.SavePath),
+                        StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1)
+                    .Select(group => group.Key).ToList();
+                if (duplicateOutputs.Count != 0)
+                    throw new ValidationException("Pack and Go 的 Asset 实际输出文件重名：" +
+                        string.Join("; ", duplicateOutputs));
+                var statuses = document.Extension.SavePackAndGo(packAndGo) as int[];
+                if (statuses == null)
+                    throw new ValidationException("Pack and Go 未返回保存状态。");
+                // SOLIDWORKS documents SavePackAndGo only as returning an array of status
+                // codes; it does not guarantee that the array length always matches the
+                // earlier GetDocumentNames result. Some assemblies omit a context/reference
+                // status even though the required files were saved. Only use per-file status
+                // values when the one-to-one mapping is unambiguous. In every case, the
+                // authoritative Asset-boundary check below requires every included output to
+                // physically exist before it can be promoted into source/.
+                if (statuses.Length == originalNames.Count)
+                {
+                    foreach (var item in included)
+                        EnsurePackAndGoSucceeded(statuses[item.Index], item.OriginalName);
+                }
+
+                var missingOutputs = includedOutputs.Where(item => !File.Exists(item.SavePath))
+                    .Select(item => item.SavePath).ToList();
+                if (missingOutputs.Count != 0)
+                    throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                        "Pack and Go 缺少 Asset 内输出文件（原始清单 {0}，Asset 内文件 {1}，返回状态 {2}）：{3}",
+                        originalNames.Count, included.Count, statuses.Length, SummarizePaths(missingOutputs)));
+                foreach (var item in includedOutputs)
+                {
+                    var source = item.SavePath;
+                    var destination = Path.Combine(destinationDirectory, Path.GetFileName(item.SavePath));
+                    if (File.Exists(destination))
+                        throw new ValidationException("Asset 源文件目录存在同名模型，无法安全覆盖：" + destination);
+                    File.Copy(source, destination, false);
+                }
             }
-            if (!packAndGo.SetDocumentSaveToNames(saveNames))
-                throw new ValidationException("Pack and Go 无法设置 Asset 层级文件清单。");
-            var statuses = document.Extension.SavePackAndGo(packAndGo) as int[];
-            if (statuses == null)
-                throw new ValidationException("Pack and Go 未返回保存状态。");
-            var selectedIndexes = Enumerable.Range(0, saveNames.Length)
-                .Where(index => !string.IsNullOrWhiteSpace(saveNames[index])).ToList();
-            if (statuses.Length == originalNames.Count)
+            finally
             {
-                foreach (var index in selectedIndexes)
-                    EnsurePackAndGoSucceeded(statuses[index], originalNames[index]);
+                DeleteWorkingDirectory(workingDirectory);
             }
-            else if (statuses.Length == selectedIndexes.Count)
+        }
+
+        private static void DeleteWorkingDirectory(string directory)
+        {
+            if (!Directory.Exists(directory)) return;
+            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
             {
-                for (var i = 0; i < selectedIndexes.Count; i++)
-                    EnsurePackAndGoSucceeded(statuses[i], originalNames[selectedIndexes[i]]);
+                try { File.SetAttributes(file, FileAttributes.Normal); }
+                catch { }
             }
-            else
-            {
-                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                    "Pack and Go 保存状态数量异常：原始文件 {0}，实际保存 {1}，返回状态 {2}。",
-                    originalNames.Count, selectedIndexes.Count, statuses.Length));
-            }
-            var expectedOutputs = new HashSet<string>(destinations.Values.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-            var actualOutputs = new HashSet<string>(Directory.EnumerateFiles(destinationDirectory, "*", SearchOption.AllDirectories)
-                .Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-            var missingOutputs = expectedOutputs.Where(path => !actualOutputs.Contains(path)).ToList();
-            if (missingOutputs.Count != 0)
-                throw new ValidationException("Pack and Go 缺少输出文件：" + string.Join("; ", missingOutputs));
-            var unexpectedOutputs = actualOutputs.Where(path => !expectedOutputs.Contains(path)).ToList();
-            if (unexpectedOutputs.Count != 0)
-                throw new ValidationException("Pack and Go 输出了 Asset 层级外文件：" + string.Join("; ", unexpectedOutputs));
+            Directory.Delete(directory, true);
         }
 
         private static void EnsurePackAndGoSucceeded(int status, string originalName)
@@ -335,204 +397,65 @@ namespace SolidWorksAssetExporter.AddIn
             return strings == null ? new List<string>() : strings.ToList();
         }
 
-        private static IDictionary<string, string> BuildDestinationNames(IEnumerable<string> files, string destinationDirectory)
+        private static string ResolvePackAndGoOutputPath(string saveName, string workingDirectory)
         {
-            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var source in files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                var fileName = Path.GetFileName(source);
-                if (!usedNames.Add(fileName))
-                {
-                    var stem = Path.GetFileNameWithoutExtension(fileName);
-                    var extension = Path.GetExtension(fileName);
-                    var suffix = FileHash.Sha256(source).Substring(0, 8);
-                    fileName = stem + "_" + suffix + extension;
-                    var counter = 2;
-                    while (!usedNames.Add(fileName)) fileName = stem + "_" + suffix + "_" + (counter++).ToString(CultureInfo.InvariantCulture) + extension;
-                }
-                result.Add(source, Path.Combine(destinationDirectory, fileName));
-            }
-            return result;
+            if (string.IsNullOrWhiteSpace(saveName))
+                throw new ValidationException("Pack and Go 返回了空的实际输出文件名。");
+            var fullPath = Path.IsPathRooted(saveName)
+                ? Path.GetFullPath(saveName)
+                : Path.GetFullPath(Path.Combine(workingDirectory, saveName));
+            PathPolicy.RelativeTo(workingDirectory, fullPath);
+            return fullPath;
         }
+
+        private static string SummarizePaths(IEnumerable<string> paths)
+        {
+            var values = (paths ?? Enumerable.Empty<string>()).Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            const int maximum = 10;
+            var summary = string.Join("; ", values.Take(maximum));
+            return values.Count <= maximum ? summary : summary + "; ...（共 " +
+                values.Count.ToString(CultureInfo.InvariantCulture) + " 个）";
+        }
+
     }
 
     public sealed class SwDrawingExporter
     {
-        // SolidWorks.Interop.swcommands.swCommands_e.swCommands_Open_Associated_Drw.
-        private const int OpenAssociatedDrawingCommandId = 2458;
-        private readonly SldWorks _app;
-        public SwDrawingExporter(SldWorks app) { _app = app; }
+        public SwDrawingExporter() { }
 
-        public IList<string> ExportDrawings(IEnumerable<string> drawingFiles, string sourceDestination, string pdfDestination)
+        public IList<string> CopyDrawingSources(IEnumerable<string> drawingFiles, string destinationDirectory)
         {
-            var exported = new List<string>();
-            foreach (var drawingPath in (drawingFiles ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase))
+            var copied = new List<string>();
+            Directory.CreateDirectory(destinationDirectory);
+            foreach (var drawingPath in (drawingFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
-                Directory.CreateDirectory(sourceDestination); Directory.CreateDirectory(pdfDestination);
-                var sourceName = UniquePath(sourceDestination, Path.GetFileName(drawingPath));
-                File.Copy(drawingPath, sourceName, false);
-                var pdfName = UniquePath(pdfDestination, Path.GetFileNameWithoutExtension(drawingPath) + ".pdf");
-                ExportAllSheetsPdf(drawingPath, pdfName);
-                exported.Add(drawingPath);
+                var destination = Path.Combine(destinationDirectory, Path.GetFileName(drawingPath));
+                if (File.Exists(destination))
+                    throw new ValidationException("Asset 源文件目录存在同名图纸，无法安全覆盖：" + destination);
+                File.Copy(drawingPath, destination, false);
+                copied.Add(drawingPath);
             }
-            return exported;
+            return copied;
         }
 
         public IList<string> FindDirectDrawingFiles(IEnumerable<string> modelFiles)
         {
             var drawings = new List<string>();
-            var original = _app.ActiveDoc as ModelDoc2;
-            if (original == null) throw new ValidationException("查找工程图时没有活动的 SOLIDWORKS 文档。");
-
             foreach (var modelPath in (modelFiles ?? Enumerable.Empty<string>()).Select(Path.GetFullPath)
                 .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                // SOLIDWORKS 的“打开工程图”只自动查找模型同目录下的同名图纸。
-                // 先判断文件是否存在，避免命令在未找到时弹出全局浏览窗口。
+                // Preview only needs the exact same lookup rule as SOLIDWORKS "Open Drawing":
+                // same directory and same file name. Reading the path directly avoids opening any
+                // model or drawing window. Export only copies the original SLDDRW beside the
+                // packaged SLDASM/SLDPRT files; PDF generation is intentionally disabled.
                 var expectedDrawing = Path.ChangeExtension(modelPath, ".SLDDRW");
                 if (!File.Exists(expectedDrawing)) continue;
-                OpenUsingSolidWorksCommand(modelPath, expectedDrawing, original);
                 drawings.Add(Path.GetFullPath(expectedDrawing));
             }
-            RestoreActiveDocument(original);
             return drawings.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private void OpenUsingSolidWorksCommand(string modelPath, string expectedDrawing, ModelDoc2 original)
-        {
-            var model = _app.GetOpenDocumentByName(modelPath) as ModelDoc2;
-            if (model == null) throw new ValidationException("Asset 模型未在 SOLIDWORKS 中加载：" + modelPath);
-            var alreadyOpen = _app.GetOpenDocumentByName(expectedDrawing) as ModelDoc2;
-            try
-            {
-                ActivateDocument(model);
-                model.ClearSelection2(true);
-                if (!_app.RunCommand(OpenAssociatedDrawingCommandId, "Asset Exporter: Open Drawing"))
-                    throw new ValidationException("SOLIDWORKS“打开工程图”命令执行失败：" + modelPath);
-                var opened = _app.GetOpenDocumentByName(expectedDrawing) as ModelDoc2;
-                if (opened == null)
-                    throw new ValidationException("SOLIDWORKS 未打开模型对应的工程图：" + expectedDrawing);
-            }
-            finally
-            {
-                if (alreadyOpen == null)
-                {
-                    var opened = _app.GetOpenDocumentByName(expectedDrawing) as ModelDoc2;
-                    if (opened != null) _app.CloseDoc(opened.GetTitle());
-                }
-                RestoreActiveDocument(original);
-            }
-        }
-
-        private void ActivateDocument(ModelDoc2 document)
-        {
-            int errors = 0;
-            var active = _app.ActivateDoc3(document.GetTitle(), false,
-                (int)swRebuildOnActivation_e.swDontRebuildActiveDoc, ref errors) as ModelDoc2;
-            if (active == null || errors != 0)
-                throw new ValidationException("无法激活模型以调用“打开工程图”：" + document.GetPathName() + "; errors=" + errors);
-        }
-
-        private void RestoreActiveDocument(ModelDoc2 document)
-        {
-            if (document == null) return;
-            var active = _app.ActiveDoc as ModelDoc2;
-            if (active != null && string.Equals(active.GetTitle(), document.GetTitle(), StringComparison.OrdinalIgnoreCase)) return;
-            ActivateDocument(document);
-        }
-
-        private void ExportAllSheetsPdf(string drawingPath, string destination)
-        {
-            EnsureUnicodePdfFontAvailable();
-            bool openedHere; var document = OpenDrawing(drawingPath, out openedHere);
-            try
-            {
-                using (new SwActiveDocumentScope(_app, document))
-                {
-                    var data = (ExportPdfData)_app.GetExportFileData((int)swExportDataFileType_e.swExportPdfData);
-                    var drawing = document as DrawingDoc;
-                    var sheetNames = DrawingSheetNames(drawing);
-                    if (sheetNames.Count == 0)
-                        throw new ValidationException("图纸不包含可导出的 Sheet：" + drawingPath);
-                    var currentSheet = drawing.GetCurrentSheet() as Sheet;
-                    var currentSheetName = currentSheet == null ? string.Empty : currentSheet.GetName();
-                    var sheets = new DispatchWrapper[sheetNames.Count];
-                    try
-                    {
-                        for (var i = 0; i < sheetNames.Count; i++)
-                        {
-                            if (!drawing.ActivateSheet(sheetNames[i]))
-                                throw new ValidationException("无法激活图纸 Sheet：" + sheetNames[i] + "；" + drawingPath);
-                            var sheet = drawing.GetCurrentSheet() as Sheet;
-                            if (sheet == null) throw new ValidationException("无法读取图纸 Sheet：" + sheetNames[i] + "；" + drawingPath);
-                            sheets[i] = new DispatchWrapper(sheet);
-                        }
-                    }
-                    finally
-                    {
-                        if (!string.IsNullOrWhiteSpace(currentSheetName)) drawing.ActivateSheet(currentSheetName);
-                    }
-                    if (data == null || !data.SetSheets((int)swExportDataSheetsToExport_e.swExportData_ExportSpecifiedSheets, sheets))
-                        throw new ValidationException("无法设置 PDF 全页导出：" + drawingPath);
-                    data.ViewPdfAfterSaving = false;
-                    int errors = 0, warnings = 0;
-                    var ok = document.Extension.SaveAs(destination, (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
-                        (int)swSaveAsOptions_e.swSaveAsOptions_Silent, data, ref errors, ref warnings);
-                    if (!ok || errors != 0 || !File.Exists(destination))
-                        throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                            "图纸 PDF 导出失败：{0}；目标：{1}；errors={2}, warnings={3}, SaveAs={4}",
-                            drawingPath, destination, errors, warnings, ok));
-                }
-            }
-            finally { if (openedHere) _app.CloseDoc(document.GetTitle()); }
-        }
-
-        private static IList<string> DrawingSheetNames(DrawingDoc drawing)
-        {
-            if (drawing == null) return new List<string>();
-            var values = drawing.GetSheetNames();
-            var strings = values as string[];
-            if (strings != null) return strings.Where(value => !string.IsNullOrWhiteSpace(value)).ToList();
-            var objects = values as object[];
-            return objects == null ? new List<string>() : objects.Select(value => Convert.ToString(value, CultureInfo.InvariantCulture))
-                .Where(value => !string.IsNullOrWhiteSpace(value)).ToList();
-        }
-
-        private static void EnsureUnicodePdfFontAvailable()
-        {
-            using (var fonts = new InstalledFontCollection())
-            {
-                if (fonts.Families.Any(font => string.Equals(font.Name, "Arial Unicode MS", StringComparison.OrdinalIgnoreCase))) return;
-            }
-            throw new ValidationException("系统缺少或未正确安装字体“Arial Unicode MS”，SOLIDWORKS 无法导出包含中文等非英文字符的 PDF。" +
-                "请从有合法 Microsoft Office 授权的安装介质修复该字体，或先把图纸文字替换为系统已安装且支持中文的字体，然后重试。");
-        }
-
-        private ModelDoc2 OpenDrawing(string path, out bool openedHere)
-        {
-            var existing = _app.GetOpenDocumentByName(path) as ModelDoc2;
-            if (existing != null)
-            {
-                if (existing.GetSaveFlag()) throw new ValidationException("图纸存在未保存修改：" + path);
-                openedHere = false; return existing;
-            }
-            int errors = 0, warnings = 0;
-            var document = _app.OpenDoc6(path, (int)swDocumentTypes_e.swDocDRAWING,
-                (int)swOpenDocOptions_e.swOpenDocOptions_Silent | (int)swOpenDocOptions_e.swOpenDocOptions_ReadOnly,
-                string.Empty, ref errors, ref warnings) as ModelDoc2;
-            if (document == null || errors != 0) throw new ValidationException("无法打开图纸：" + path);
-            openedHere = true; return document;
-        }
-
-        private static string UniquePath(string directory, string fileName)
-        {
-            var candidate = Path.Combine(directory, fileName); var index = 2;
-            while (File.Exists(candidate))
-            {
-                candidate = Path.Combine(directory, Path.GetFileNameWithoutExtension(fileName) + "_" + index + Path.GetExtension(fileName)); index++;
-            }
-            return candidate;
-        }
     }
 }

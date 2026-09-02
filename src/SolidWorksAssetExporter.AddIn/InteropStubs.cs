@@ -11,7 +11,7 @@ namespace SolidWorks.Interop.sldworks
 {
     public class SldWorks
     {
-        public object ActiveDoc { get; set; }
+        public virtual object ActiveDoc { get; set; }
         public bool SetAddinCallbackInfo2(int reserved, object addin, int cookie) { return true; }
         public CommandManager GetCommandManager(int cookie) { return null; }
         public int GetUserPreferenceIntegerValue(int value) { return 0; }
@@ -21,20 +21,24 @@ namespace SolidWorks.Interop.sldworks
         public string GetUserPreferenceStringValue(int value) { return string.Empty; }
         public bool SetUserPreferenceStringValue(int value, string setting) { return true; }
         public object GetExportFileData(int type) { return null; }
-        public object GetOpenDocumentByName(string path) { return null; }
+        public virtual object GetOpenDocumentByName(string path) { return null; }
         public string GetSearchFolders(int type) { return string.Empty; }
         public bool RunCommand(int commandId, string newTitle) { return true; }
-        public object OpenDoc6(string path, int type, int options, string configuration, ref int errors, ref int warnings) { return null; }
-        public object ActivateDoc3(string title, bool usePreferences, int option, ref int errors) { return null; }
-        public void CloseDoc(string title) { }
+        public virtual object OpenDoc6(string path, int type, int options, string configuration, ref int errors, ref int warnings) { return null; }
+        public virtual bool GetDocumentVisible(int type) { return true; }
+        public virtual void DocumentVisible(bool visible, int type) { }
+        public virtual object ActivateDoc3(string title, bool usePreferences, int option, ref int errors) { return null; }
+        public virtual void CloseDoc(string title) { }
+        public virtual void QuitDoc(string title) { }
     }
 
     public interface Component2
     {
         string Name2 { get; }
         int GetID(); int Visible { get; }
-        bool IsSuppressed(); int GetSuppression2(); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
-        object GetModelDoc2(); object GetChildren();
+        bool IsSuppressed(); int GetSuppression2(); int SetSuppression2(int state); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
+        object GetModelDoc2(); object GetChildren(); string GetPathName();
+        bool IsVirtual { get; }
         MathTransform Transform2 { get; }
     }
 
@@ -42,11 +46,13 @@ namespace SolidWorks.Interop.sldworks
 
     public interface ModelDoc2
     {
-        int GetType(); string GetPathName(); string GetTitle(); bool GetSaveFlag(); string get_SummaryInfo(int fieldId);
+        int GetType(); string GetPathName(); string GetTitle(); bool GetSaveFlag(); int GetUpdateStamp(); string get_SummaryInfo(int fieldId);
+        bool IsOpenedReadOnly();
+        bool Visible { get; set; }
         ConfigurationManager ConfigurationManager { get; }
         ModelDocExtension Extension { get; }
         object SelectionManager { get; }
-        void ClearSelection2(bool all);
+        void ClearSelection2(bool all); bool ShowConfiguration2(string name);
     }
 
     public interface DrawingDoc : ModelDoc2
@@ -90,7 +96,9 @@ namespace SolidWorks.Interop.sldworks
         bool IncludeDrawings { get; set; } bool IncludeSuppressed { get; set; }
         bool IncludeToolboxComponents { get; set; } bool IncludeSimulationResults { get; set; }
         bool FlattenToSingleFolder { get; set; }
-        bool GetDocumentNames(out object names); bool SetDocumentSaveToNames(object names); bool SetSaveToName(bool value, string path);
+          bool GetDocumentNames(out object names); bool GetDocumentSaveToNames(out object names, out object statuses);
+          bool SetDocumentSaveToNames(object names); bool SetSaveToName(bool value, string path);
+          bool SetSaveToName2(bool value, string path);
     }
     public interface CommandManager
     {
@@ -110,6 +118,7 @@ namespace SolidWorks.Interop.swconst
     public enum swComponentVisibilityState_e { swComponentHidden = 0, swComponentVisible = 1, swComponentUnknown = -1 }
     public enum swComponentSuppressionState_e { swComponentSuppressed = 0, swComponentLightweight = 1, swComponentFullyResolved = 2, swComponentResolved = 3, swComponentFullyLightweight = 4, swComponentInternalIdMismatch = 5 }
     public enum swComponentResolveStatus_e { swResolveOk = 0, swResolveAbortedByUser = 1, swResolveNotPerformed = 2, swResolveError = 3 }
+    public enum swCustomInfoGetResult_e { swCustomInfoGetResult_CachedValue = 0, swCustomInfoGetResult_NotPresent = 1, swCustomInfoGetResult_ResolvedValue = 2 }
     public enum swSummInfoField_e { swSumInfoCreateDate = 6 }
     public enum swDocumentTypes_e { swDocPART = 1, swDocASSEMBLY = 2, swDocDRAWING = 3 }
     public enum swUserPreferenceIntegerValue_e { swStepAP, swStepExportPreference, swExportStlUnits, swSTLQuality }
@@ -123,9 +132,15 @@ namespace SolidWorks.Interop.swconst
     public enum swPackAndGoSaveStatus_e { swPackAndGoSaveStatus_Succeed = 0 }
     public enum swExportDataFileType_e { swExportPdfData = 1 }
     public enum swExportDataSheetsToExport_e { swExportData_ExportAllSheets = 1, swExportData_ExportSpecifiedSheets = 3 }
-    public enum swOpenDocOptions_e { swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2 }
+    [Flags] public enum swOpenDocOptions_e
+    {
+        swOpenDocOptions_Silent = 1, swOpenDocOptions_ReadOnly = 2,
+        swOpenDocOptions_OverrideDefaultLoadLightweight = 64, swOpenDocOptions_LoadLightweight = 128,
+        swOpenDocOptions_DontLoadHiddenComponents = 256, swOpenDocOptions_LoadExternalReferencesInMemory = 512
+    }
     public enum swSearchFolderTypes_e { swDocumentType = 0 }
     public enum swRebuildOnActivation_e { swDontRebuildActiveDoc = 1 }
+    [Flags] public enum swActivateDocError_e { swGenericActivateError = 1, swDocNeedsRebuildWarning = 2 }
     public enum swCreateCommandGroupErrors { swCreateCommandGroup_Failed = 0, swCreateCommandGroup_Success = 1, swCreateCommandGroup_Exceeds_ToolBarIDs = 2 }
     [Flags] public enum swCommandItemType_e { swMenuItem = 1, swToolbarItem = 2 }
 }

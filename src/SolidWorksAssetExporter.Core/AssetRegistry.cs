@@ -26,6 +26,80 @@ namespace SolidWorksAssetExporter.Core
         [DataMember(Name = "registered_utc", Order = 6)] public string RegisteredUtc { get; set; }
     }
 
+    public enum AssetVersionDecisionKind
+    {
+        NewAsset,
+        ReuseCurrentVersion,
+        CreateNewVersion,
+        ContentAlreadyRegisteredAtDifferentVersion,
+        UpgradeRequired
+    }
+
+    public sealed class AssetVersionDecision
+    {
+        public AssetVersionDecisionKind Kind { get; set; }
+        public bool CanExport { get; set; }
+        public int? RegisteredVersion { get; set; }
+        public int? SuggestedVersion { get; set; }
+    }
+
+    public static class AssetVersionPolicy
+    {
+        public static AssetVersionDecision Evaluate(string uuid, int currentVersion, string currentFingerprint,
+            IEnumerable<AssetRegistration> registrations)
+        {
+            Guid parsedUuid;
+            if (!Guid.TryParse(uuid, out parsedUuid)) throw new ValidationException("无法判断无效的 Asset UUID：" + uuid);
+            if (currentVersion <= 0) throw new ValidationException("无法判断非正整数 Asset 版本。");
+            if (string.IsNullOrWhiteSpace(currentFingerprint)) throw new ValidationException("无法判断缺少内容指纹的 Asset。");
+            var normalizedUuid = parsedUuid.ToString("D");
+            var sameUuid = (registrations ?? Enumerable.Empty<AssetRegistration>())
+                .Where(value => value != null && string.Equals(value.Uuid, normalizedUuid, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(value => value.Version).ToList();
+            var matching = sameUuid.Where(value => string.Equals(value.ContentFingerprint, currentFingerprint,
+                StringComparison.OrdinalIgnoreCase)).OrderByDescending(value => value.Version).ToList();
+            var exactMatch = matching.FirstOrDefault(value => value.Version == currentVersion);
+            if (exactMatch != null)
+            {
+                return new AssetVersionDecision
+                {
+                    Kind = AssetVersionDecisionKind.ReuseCurrentVersion,
+                    CanExport = true,
+                    RegisteredVersion = currentVersion
+                };
+            }
+            if (matching.Count != 0)
+            {
+                return new AssetVersionDecision
+                {
+                    Kind = AssetVersionDecisionKind.ContentAlreadyRegisteredAtDifferentVersion,
+                    CanExport = false,
+                    RegisteredVersion = matching[0].Version
+                };
+            }
+            if (sameUuid.Count == 0)
+                return new AssetVersionDecision { Kind = AssetVersionDecisionKind.NewAsset, CanExport = true };
+
+            var maximumVersion = sameUuid.Max(value => value.Version);
+            if (currentVersion > maximumVersion)
+            {
+                return new AssetVersionDecision
+                {
+                    Kind = AssetVersionDecisionKind.CreateNewVersion,
+                    CanExport = true,
+                    RegisteredVersion = maximumVersion
+                };
+            }
+            return new AssetVersionDecision
+            {
+                Kind = AssetVersionDecisionKind.UpgradeRequired,
+                CanExport = false,
+                RegisteredVersion = maximumVersion,
+                SuggestedVersion = maximumVersion + 1
+            };
+        }
+    }
+
     public static class AssetRegistryStore
     {
         public const string FileName = "asset-registry.json";
@@ -34,11 +108,37 @@ namespace SolidWorksAssetExporter.Core
         {
             var path = RegistryPath(assetLibraryRoot);
             if (!File.Exists(path)) return Empty();
+            return LoadFromFile(path);
+        }
+
+        public static AssetRegistryDocument LoadFromFile(string registryPath)
+        {
+            if (string.IsNullOrWhiteSpace(registryPath) || !File.Exists(registryPath))
+                throw new ValidationException("Asset 注册表不存在：" + registryPath);
             AssetRegistryDocument registry;
-            try { registry = JsonFile.Read<AssetRegistryDocument>(path); }
+            try { registry = JsonFile.Read<AssetRegistryDocument>(registryPath); }
             catch (Exception ex) { throw new ValidationException("Asset 注册表无法读取：" + ex.Message); }
             Validate(registry);
             return registry;
+        }
+
+        public static AssetRegistryDocument CreateEmpty()
+        {
+            return Empty();
+        }
+
+        public static void Replace(string assetLibraryRoot, AssetRegistryDocument registry)
+        {
+            if (registry == null) throw new ArgumentNullException("registry");
+            Validate(registry);
+            var root = Path.GetFullPath(assetLibraryRoot);
+            Directory.CreateDirectory(root);
+            WriteAtomic(root, registry);
+        }
+
+        public static void ReplaceFromFile(string assetLibraryRoot, string incomingRegistryPath)
+        {
+            Replace(assetLibraryRoot, LoadFromFile(incomingRegistryPath));
         }
 
         public static ISet<string> RegisteredAssetIds(string assetLibraryRoot)
@@ -73,6 +173,64 @@ namespace SolidWorksAssetExporter.Core
             return true;
         }
 
+        public static int ImportKnownManifestsForUuid(string assetLibraryRoot, string uuid)
+        {
+            Guid parsedUuid;
+            if (!Guid.TryParse(uuid, out parsedUuid)) throw new ValidationException("无法导入无效的 Asset UUID：" + uuid);
+            var root = Path.GetFullPath(assetLibraryRoot);
+            var normalizedUuid = parsedUuid.ToString("D");
+            var uuidDirectory = Path.Combine(root, normalizedUuid);
+            if (!Directory.Exists(uuidDirectory)) return 0;
+
+            Directory.CreateDirectory(root);
+            var registry = Load(root);
+            var byId = registry.Assets.ToDictionary(value => value.AssetId, StringComparer.OrdinalIgnoreCase);
+            var imported = 0;
+            foreach (var versionDirectory in Directory.EnumerateDirectories(uuidDirectory, "v*", SearchOption.TopDirectoryOnly))
+            {
+                int version;
+                var directoryName = Path.GetFileName(versionDirectory);
+                if (directoryName == null || directoryName.Length < 2 ||
+                    !int.TryParse(directoryName.Substring(1), NumberStyles.None, CultureInfo.InvariantCulture, out version) || version <= 0)
+                    continue;
+                var manifestPath = Path.Combine(versionDirectory,
+                    "asset_" + normalizedUuid + "_v" + version.ToString(CultureInfo.InvariantCulture) + ".json");
+                if (!File.Exists(manifestPath)) continue;
+                AssetManifest manifest;
+                try { manifest = JsonFile.Read<AssetManifest>(manifestPath); }
+                catch (Exception ex) { throw new ValidationException("已有 Asset manifest 无法导入注册表：" + ex.Message); }
+                if (!string.Equals(manifest.Uuid, normalizedUuid, StringComparison.OrdinalIgnoreCase) ||
+                    manifest.Version != version || string.IsNullOrWhiteSpace(manifest.ContentFingerprint))
+                    throw new ValidationException("已有 Asset manifest 的 UUID、版本或内容指纹无效：" + manifestPath);
+                var assetId = IdentityService.AssetId(parsedUuid, version);
+                AssetRegistration existing;
+                if (byId.TryGetValue(assetId, out existing))
+                {
+                    if (!string.Equals(existing.ContentFingerprint, manifest.ContentFingerprint, StringComparison.OrdinalIgnoreCase))
+                        throw new ValidationException("Asset 注册表与本地 manifest 内容指纹冲突：" + assetId);
+                    continue;
+                }
+                var entry = new AssetRegistration
+                {
+                    AssetId = assetId,
+                    Uuid = normalizedUuid,
+                    Version = version,
+                    RelativeDirectory = normalizedUuid + "/v" + version.ToString(CultureInfo.InvariantCulture),
+                    ContentFingerprint = manifest.ContentFingerprint,
+                    RegisteredUtc = File.GetLastWriteTimeUtc(manifestPath).ToString(
+                        "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture)
+                };
+                registry.Assets.Add(entry);
+                byId.Add(assetId, entry);
+                imported++;
+            }
+            if (imported == 0) return 0;
+            registry.Assets = registry.Assets.OrderBy(value => value.AssetId, StringComparer.OrdinalIgnoreCase).ToList();
+            Validate(registry);
+            WriteAtomic(root, registry);
+            return imported;
+        }
+
         public static void Register(string assetLibraryRoot, string uuid, int version, string contentFingerprint)
         {
             Guid parsedUuid;
@@ -100,6 +258,37 @@ namespace SolidWorksAssetExporter.Core
             registry.Assets = registry.Assets.OrderBy(value => value.AssetId, StringComparer.OrdinalIgnoreCase).ToList();
             Validate(registry);
             WriteAtomic(root, registry);
+        }
+
+        public static int MergeFromFile(string assetLibraryRoot, string incomingRegistryPath)
+        {
+            if (string.IsNullOrWhiteSpace(incomingRegistryPath) || !File.Exists(incomingRegistryPath))
+                throw new ValidationException("待合并的 Asset 注册表不存在：" + incomingRegistryPath);
+
+            var incoming = LoadFromFile(incomingRegistryPath);
+
+            var root = Path.GetFullPath(assetLibraryRoot);
+            Directory.CreateDirectory(root);
+            var local = Load(root);
+            var byId = local.Assets.ToDictionary(value => value.AssetId, StringComparer.OrdinalIgnoreCase);
+            var imported = 0;
+            foreach (var entry in incoming.Assets)
+            {
+                AssetRegistration existing;
+                if (byId.TryGetValue(entry.AssetId, out existing))
+                {
+                    if (!SameRegistration(existing, entry))
+                        throw new ValidationException("本地与远端 Asset 注册表冲突：" + entry.AssetId);
+                    continue;
+                }
+                local.Assets.Add(entry);
+                byId.Add(entry.AssetId, entry);
+                imported++;
+            }
+            local.Assets = local.Assets.OrderBy(value => value.AssetId, StringComparer.OrdinalIgnoreCase).ToList();
+            Validate(local);
+            WriteAtomic(root, local);
+            return imported;
         }
 
         private static AssetRegistryDocument Empty()
@@ -134,6 +323,16 @@ namespace SolidWorksAssetExporter.Core
                     throw new ValidationException("Asset 注册表条目缺少内容指纹：" + entry.AssetId);
                 if (!ids.Add(entry.AssetId)) throw new ValidationException("Asset 注册表包含重复条目：" + entry.AssetId);
             }
+        }
+
+        private static bool SameRegistration(AssetRegistration left, AssetRegistration right)
+        {
+            return string.Equals(left.AssetId, right.AssetId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(left.Uuid, right.Uuid, StringComparison.OrdinalIgnoreCase) &&
+                left.Version == right.Version &&
+                string.Equals((left.RelativeDirectory ?? string.Empty).Replace('\\', '/'),
+                    (right.RelativeDirectory ?? string.Empty).Replace('\\', '/'), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(left.ContentFingerprint, right.ContentFingerprint, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void WriteAtomic(string root, AssetRegistryDocument registry)

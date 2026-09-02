@@ -1,31 +1,110 @@
-# 发布与安装
+# v1.0.4 发布教程
 
-## 本地制作发布包
+## 1. 发布前检查
 
-构建默认使用仓库 `third_party\solidworks` 中的官方 Interop DLL，构建机无需安装 SOLIDWORKS：
-
-```powershell
-.\scripts\build-addin.ps1 -Configuration Release
-.\scripts\new-release-package.ps1 -Version v1.0.1
-```
-
-生成的 `artifacts\SolidWorksAssetExporter-v1.0.1.zip` 包含插件 DLL、SOLIDWORKS Interop DLL 与 CMD 安装、卸载脚本。
-
-## 在目标主机安装
-
-目标主机需要安装 64 位 SOLIDWORKS 和 .NET Framework 4.8。关闭 SOLIDWORKS 并完整解压发布包，然后右键 `Install.cmd`，选择“以管理员身份运行”。
-
-安装脚本直接使用发布包内的 DLL，不需要 PowerShell，也不需要用户指定 SOLIDWORKS DLL 路径。管理员权限仍是注册 COM Add-in 和写入 `%ProgramData%` 的必要条件。
-
-卸载前关闭 SOLIDWORKS，然后右键 `Uninstall.cmd`，选择“以管理员身份运行”。
-
-## GitHub Actions 发布
-
-推送格式为 `v*` 的 tag 后，GitHub 托管的 Windows Runner 会自动执行生产构建、创建 ZIP 并发布 GitHub Release：
+发布必须从已经合并并通过 CI 的 `main` 创建，不能直接从尚未合并的功能分支打标签：
 
 ```powershell
-git tag v1.0.1
-git push origin v1.0.1
+git switch main
+git pull --ff-only origin main
+git status
 ```
 
-该流程不需要自托管 Runner，也不需要配置 `SOLIDWORKS_INTEROP_DIR`。
+确认工作区干净，并检查仓库中所有发布版本均为 `v1.0.4`：
+
+```powershell
+rg "1\.0\.34|v1\.0\.3|1\.0\.3\.0" README.md docs src
+```
+
+上述命令不应找到仍需更新的旧发布版本。历史变更记录中的旧版本号可以保留。
+
+## 2. 构建和验证
+
+构建默认使用 `third_party\solidworks` 中的官方 Interop DLL，构建机无需安装 SOLIDWORKS：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-core.ps1 -Configuration Release
+powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuration Release
+powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Version v1.0.4
+```
+
+生成的安装包为：
+
+```text
+artifacts\SolidWorksAssetExporter-v1.0.4.zip
+```
+
+完整解压 ZIP，确认根目录至少包含：
+
+```text
+Install.cmd
+Uninstall.cmd
+set-interactive-user-startup.ps1
+payload\SolidWorksAssetExporter.AddIn.dll
+payload\SolidWorksAssetExporter.Core.dll
+```
+
+## 3. 提交 v1.0.4 改动
+
+在发布分支提交并通过 PR 合并到 `main`。不要把 `artifacts/` 构建产物提交进 Git：
+
+```powershell
+git add README.md docs .github src scripts tests
+git status
+git commit -m "release: prepare v1.0.4"
+git push
+```
+
+PR 标题建议使用 `release: prepare v1.0.4`，正文粘贴 README 中的“v1.0.4 升版说明”，并列出自动测试、生产构建和 SOLIDWORKS 现场验证结果。
+
+## 4. 创建标签并自动发布
+
+PR 合并后重新同步 `main`，确认 `v1.0.4` 标签尚不存在：
+
+```powershell
+git switch main
+git pull --ff-only origin main
+git tag --list v1.0.4
+```
+
+没有输出时创建并推送带说明的标签：
+
+```powershell
+git tag -a v1.0.4 -m "SolidWorks Asset Exporter v1.0.4"
+git push origin v1.0.4
+```
+
+推送 `v*` 标签后，GitHub Actions 会自动执行生产构建、制作 ZIP，并创建 GitHub Release。不要在推送标签前手工创建同名 Release。工作流支持安全重跑：如果 Release 已存在，会覆盖上传同名安装包，不会再次创建 Release。
+
+## 5. 填写 GitHub Release 说明
+
+Release 标题使用：
+
+```text
+SolidWorks Asset Exporter v1.0.4
+```
+
+升版说明：
+
+- 新增 Wanxiang 资产注册表读取、Asset/Project 上传及 Asset 原子注册。
+- Asset UUID 升级为 v2 规则，新增持久 SHA-256 缓存及远端版本判断。
+- 新增 `class=robot` 纯元数据 Asset；不生成几何、源模型或图纸。
+- 非 Asset 装配体递归拆分至叶节点，Asset 继续作为硬边界。
+- 加强轻量化、虚拟/内嵌组件、模型窗口和 Pack and Go 隔离处理。
+- 分类预览新增源文件快照、变化复核、阶段进度和取消。
+- Asset 图纸改为只收集原始 SLDDRW，不再生成 PDF。
+- 安装程序自动为当前桌面用户启用 Add-in。
+
+已知兼容性要求：Wanxiang 服务端必须实现 `class=robot` 且 `files=[]` 的注册例外，否则 Robot Asset 注册会返回 409。
+
+## 6. 发布后验收
+
+1. Release 的 tag 和目标提交必须是 `v1.0.4` 对应的 `main` 提交。
+2. Assets 中必须包含 `SolidWorksAssetExporter-v1.0.4.zip`，不能只有 GitHub 自动生成的 Source code。
+3. 在干净目录完整解压安装包，关闭 SOLIDWORKS，以管理员身份运行 `Install.cmd`。
+4. 启动 SOLIDWORKS，确认 `Asset / Project 混合导出` 已启用并能打开导出窗口。
+5. 完成分类预览、Asset/Project 本地导出和 Wanxiang 上传现场验证。
+
+## 7. 卸载
+
+关闭 SOLIDWORKS，然后右键安装包中的 `Uninstall.cmd`，选择“以管理员身份运行”。用户设置和导出数据不会被删除。

@@ -23,4 +23,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: powershell
-        run: gh release create "${{ github.ref_name }}" .\artifacts\SolidWorksAssetExporter-${{ github.ref_name }}.zip --generate-notes
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $archive = ".\artifacts\SolidWorksAssetExporter-$tag.zip"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $archive --clobber
+          } else {
+            gh release create $tag $archive --generate-notes --verify-tag
+          }
