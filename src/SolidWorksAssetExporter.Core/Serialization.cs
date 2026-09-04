@@ -118,7 +118,10 @@ namespace SolidWorksAssetExporter.Core
                 Number("qx", node.Pose.Rotation.X), Number("qy", node.Pose.Rotation.Y),
                 Number("qz", node.Pose.Rotation.Z), Number("qw", node.Pose.Rotation.W)));
             if (node.Kind == ExportNodeKind.Asset) element.Add(new XElement("mesh", new XAttribute("asset_id", node.AssetId)));
-            if (node.Kind == ExportNodeKind.Project) element.Add(new XElement("mesh", new XAttribute("file", node.MeshFile)));
+            if (node.Kind == ExportNodeKind.Project && !string.IsNullOrWhiteSpace(node.MeshFile))
+                element.Add(new XElement("mesh", new XAttribute("file", node.MeshFile)));
+            if (node.Kind == ExportNodeKind.Robot)
+                element.Add(new XElement("mesh", new XAttribute("robot_id", node.RobotId)));
             nodes.Add(element);
             foreach (var child in node.Children) Append(nodes, child);
         }

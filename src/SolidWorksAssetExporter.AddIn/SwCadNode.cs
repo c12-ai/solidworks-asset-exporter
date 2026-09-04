@@ -11,7 +11,8 @@ namespace SolidWorksAssetExporter.AddIn
     public sealed class SwCadNode : ICadNode, ICadSourceReference, ICadClassificationSource
     {
         private static readonly string[] ClassificationPropertyNames =
-            { PropertyRules.IsAsset, PropertyRules.AssetVersion, PropertyRules.AssemblyVersion };
+            { PropertyRules.IsAsset, PropertyRules.AssetVersion, PropertyRules.AssemblyVersion,
+                PropertyRules.AssetClass, PropertyRules.DesignPurpose };
         private readonly Component2 _component;
         private readonly SldWorks _application;
         private readonly bool _isTraversalRoot;
@@ -226,7 +227,9 @@ namespace SolidWorksAssetExporter.AddIn
                     IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
                     IsDirty = _mutationTracker.IsDirty(document, lease.OpenedHere, path),
                     FileProperties = ReadNodeProperties(document, string.Empty),
-                    ConfigurationProperties = ReadNodeProperties(document, configuration ?? string.Empty)
+                    // Business and classification metadata are intentionally file-level only.
+                    // Never read the SOLIDWORKS "Configuration Specific" property tab.
+                    ConfigurationProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 };
                 _modelCache[cacheKey] = descriptor;
                 return descriptor;
@@ -266,7 +269,7 @@ namespace SolidWorksAssetExporter.AddIn
                     IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
                     IsDirty = _mutationTracker.IsDirty(document, lease.OpenedHere, path),
                     FileProperties = ReadClassificationProperties(document, string.Empty, true),
-                    ConfigurationProperties = ReadClassificationProperties(document, configuration ?? string.Empty, true)
+                    ConfigurationProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 };
                 _modelCache[cacheKey] = descriptor;
                 return descriptor;

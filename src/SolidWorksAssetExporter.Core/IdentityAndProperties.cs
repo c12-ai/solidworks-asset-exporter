@@ -13,22 +13,14 @@ namespace SolidWorksAssetExporter.Core
         public const string AssetVersion = "asset_version";
         public const string AssemblyVersion = "assembly_version";
         public const string AssetClass = "class";
+        public const string PartName = "零件名";
+        public const string DesignPurpose = "设计目的";
 
         public static IDictionary<string, string> Merge(ModelDescriptor model)
         {
             if (model == null) throw new ValidationException("模型元数据为空。");
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             Copy(result, model.FileProperties, "文件级");
-            if (model.ConfigurationProperties != null)
-            {
-                foreach (var pair in model.ConfigurationProperties)
-                {
-                    if (result.ContainsKey(pair.Key))
-                        throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                            "模型 [{0}] 的属性 [{1}] 同时存在于文件级和配置级，不能确定唯一值。", model.FileName, pair.Key));
-                    result.Add(pair.Key, pair.Value ?? string.Empty);
-                }
-            }
             return result;
         }
 
@@ -37,8 +29,23 @@ namespace SolidWorksAssetExporter.Core
             if (model == null) throw new ValidationException("模型元数据为空。");
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             CopyClassification(result, model.FileProperties, "文件级", model.FileName);
-            CopyClassification(result, model.ConfigurationProperties, "配置级", model.FileName);
             return result;
+        }
+
+        public static IList<string> MissingOrBlankProperties(IDictionary<string, string> properties,
+            IEnumerable<string> requiredNames)
+        {
+            var missing = new List<string>();
+            if (requiredNames == null) return missing;
+            foreach (var name in requiredNames.Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                string value;
+                if (properties == null || !properties.TryGetValue(name, out value) ||
+                    string.IsNullOrWhiteSpace(value))
+                    missing.Add(name);
+            }
+            return missing;
         }
 
         private static void CopyClassification(IDictionary<string, string> target,
@@ -59,7 +66,9 @@ namespace SolidWorksAssetExporter.Core
         {
             return string.Equals(name, IsAsset, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, AssetVersion, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(name, AssemblyVersion, StringComparison.OrdinalIgnoreCase);
+                string.Equals(name, AssemblyVersion, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, AssetClass, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, DesignPurpose, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void Copy(IDictionary<string, string> target, IDictionary<string, string> source, string scope)
@@ -95,6 +104,44 @@ namespace SolidWorksAssetExporter.Core
                     StringComparison.OrdinalIgnoreCase);
             }
             return false;
+        }
+
+        public static string RequireWanxiangAssetClass(IDictionary<string, string> properties, string modelName)
+        {
+            string raw;
+            var value = properties != null && properties.TryGetValue(AssetClass, out raw)
+                ? raw ?? string.Empty : string.Empty;
+            if (value == "movable" || value == "structure" || value == "equipment") return value;
+            if (value == "moveable")
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "Asset 模型 [{0}] 的文件级自定义属性 [class] 使用了旧拼写 [moveable]；" +
+                    "Wanxiang 0.4.0 只接受 [movable]。", modelName));
+            throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                "Asset 模型 [{0}] 必须设置文件级自定义属性 [class]，且值必须精确为 " +
+                "[movable]、[structure] 或 [equipment]（全小写、无首尾空格）。", modelName));
+        }
+
+        public static string BuildRobotId(IDictionary<string, string> properties, string modelName)
+        {
+            var designPurpose = FirstNonBlank(properties, DesignPurpose);
+            if (string.IsNullOrWhiteSpace(designPurpose))
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "Robot 模型 [{0}] 必须填写文件级自定义属性 [设计目的]，用于生成 robot_id。",
+                    modelName));
+            var version = RequirePositiveInteger(properties, AssetVersion, modelName);
+            return designPurpose + ":" + version.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string FirstNonBlank(IDictionary<string, string> properties, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                string raw;
+                if (properties == null || !properties.TryGetValue(key, out raw)) continue;
+                var value = (raw ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+            return string.Empty;
         }
 
         public static int RequirePositiveInteger(IDictionary<string, string> properties, string key, string modelName)

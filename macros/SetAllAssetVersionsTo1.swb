@@ -1,0 +1,571 @@
+Option Explicit
+
+' SOLIDWORKS VBA text macro.
+' Sets the file-level custom property asset_version to the literal value 1 for
+' every unique Asset reachable from the active top-level assembly. Asset nodes
+' are hard boundaries: their children are never traversed. The macro never
+' reads or writes configuration-specific properties and never changes the
+' top-level assembly_version property.
+
+Dim swApp As Object
+
+Const SW_DOC_PART As Long = 1
+Const SW_DOC_ASSEMBLY As Long = 2
+Const SW_COMPONENT_SUPPRESSED As Long = 0
+Const SW_COMPONENT_VISIBLE As Long = 1
+Const SW_SAVE_SILENT As Long = 1
+Const SW_CUSTOM_INFO_TEXT As Long = 30
+Const SW_CUSTOM_PROPERTY_ONLY_IF_NEW As Long = 0
+
+Sub main()
+    Dim root As Object, rootComponent As Object
+    Dim assets As Object, targets As Object, visitedBranches As Object
+    Dim key As Variant, document As Object
+    Dim scanIssues As String, preflightIssues As String, issue As String
+    Dim targetList As String, successList As String, failureList As String
+    Dim backupRoot As String, reportPath As String
+    Dim targetCount As Long, successCount As Long, failureCount As Long
+    Dim answer As VbMsgBoxResult
+    Dim fatalMessage As String
+
+    On Error GoTo FatalError
+    Set swApp = Application.SldWorks
+    Set root = swApp.ActiveDoc
+    If root Is Nothing Then
+        MsgBox "Open the top-level SOLIDWORKS assembly first.", _
+            vbExclamation, "Set All Asset Versions To 1"
+        Exit Sub
+    End If
+    If CLng(root.GetType) <> SW_DOC_ASSEMBLY Then
+        MsgBox "The active document must be a SOLIDWORKS assembly.", _
+            vbExclamation, "Set All Asset Versions To 1"
+        Exit Sub
+    End If
+
+    Set assets = CreateDictionary()
+    Set targets = CreateDictionary()
+    Set visitedBranches = CreateDictionary()
+
+    ' Resolve lightweight references for reliable read/write access. The macro
+    ' does not save the top-level assembly unless it is itself an Asset target.
+    On Error Resume Next
+    root.ResolveAllLightWeightComponents False
+    Err.Clear
+    On Error GoTo FatalError
+
+    issue = ""
+    If IsAssetDocument(root, issue) Then
+        AddDocumentByPath assets, root, scanIssues
+    Else
+        If Len(issue) > 0 Then AppendLine scanIssues, issue
+        Set rootComponent = Nothing
+        On Error Resume Next
+        Set rootComponent = root.ConfigurationManager.ActiveConfiguration.GetRootComponent3(False)
+        If Err.Number <> 0 Then
+            AppendLine scanIssues, "Cannot obtain the root component: " & Err.Description
+            Err.Clear
+        End If
+        On Error GoTo FatalError
+        If Not rootComponent Is Nothing Then
+            CollectChildren rootComponent, assets, visitedBranches, scanIssues
+        End If
+    End If
+
+    For Each key In assets.Keys
+        Set document = assets.Item(key)
+        issue = ""
+        If AssetVersionNeedsReset(document, issue) Then
+            targets.Add CStr(key), document
+            targetCount = targetCount + 1
+            AppendLine targetList, CStr(key)
+        ElseIf Len(issue) > 0 Then
+            AppendLine scanIssues, issue
+        End If
+    Next key
+
+    If Len(scanIssues) > 0 Then
+        reportPath = Environ$("TEMP") & "\SolidWorksAssetVersionReset-preflight.txt"
+        WriteUtf8 reportPath, "No model was changed." & vbCrLf & vbCrLf & _
+            "The complete Asset scan could not be guaranteed:" & vbCrLf & scanIssues
+        MsgBox "Preflight found one or more scan errors. No model was changed." & vbCrLf & _
+            "Details: " & reportPath, vbCritical, "Set All Asset Versions To 1"
+        Exit Sub
+    End If
+
+    If targetCount = 0 Then
+        MsgBox "Every detected Asset already has file-level asset_version=1." & vbCrLf & _
+            "No model was changed.", vbInformation, "Set All Asset Versions To 1"
+        Exit Sub
+    End If
+
+    preflightIssues = ValidateTargets(targets)
+    If Len(preflightIssues) > 0 Then
+        reportPath = Environ$("TEMP") & "\SolidWorksAssetVersionReset-preflight.txt"
+        WriteUtf8 reportPath, "No model was changed." & vbCrLf & vbCrLf & _
+            "Target validation failed:" & vbCrLf & preflightIssues
+        MsgBox "Target validation failed. No model was changed." & vbCrLf & _
+            "Details: " & reportPath, vbCritical, "Set All Asset Versions To 1"
+        Exit Sub
+    End If
+
+    answer = MsgBox("Detected " & CStr(assets.Count) & " unique Asset file(s)." & vbCrLf & _
+        CStr(targetCount) & " file(s) have a missing asset_version or a value other than 1." & vbCrLf & vbCrLf & _
+        "The macro will:" & vbCrLf & _
+        "1. Back up every target source file." & vbCrLf & _
+        "2. Set only the file-level asset_version property to 1." & vbCrLf & _
+        "3. Save and verify every changed Asset." & vbCrLf & vbCrLf & _
+        "assembly_version, all other properties, and configuration-specific properties" & vbCrLf & _
+        "will remain unchanged." & vbCrLf & vbCrLf & _
+        "Continue?", vbYesNo + vbExclamation + vbDefaultButton2, _
+        "Set All Asset Versions To 1")
+    If answer <> vbYes Then Exit Sub
+
+    backupRoot = CreateBackupFolder()
+    issue = ""
+    If Not BackupTargets(targets, backupRoot, issue) Then
+        MsgBox "Backup failed. No model was changed." & vbCrLf & issue & vbCrLf & _
+            "Backup folder: " & backupRoot, vbCritical, "Set All Asset Versions To 1"
+        Exit Sub
+    End If
+
+    For Each key In targets.Keys
+        Set document = targets.Item(key)
+        issue = ""
+        If ResetAssetVersion(document, issue) Then
+            successCount = successCount + 1
+            AppendLine successList, CStr(key)
+        Else
+            failureCount = failureCount + 1
+            AppendLine failureList, CStr(key) & vbCrLf & "  " & issue
+        End If
+    Next key
+
+    reportPath = backupRoot & "\reset-report.txt"
+    WriteUtf8 reportPath, BuildReport(root, assets.Count, targetCount, successCount, _
+        failureCount, targetList, successList, failureList, backupRoot)
+    RestoreRoot root
+
+    If failureCount = 0 Then
+        MsgBox "Asset version reset completed successfully." & vbCrLf & vbCrLf & _
+            "Unique Assets scanned: " & CStr(assets.Count) & vbCrLf & _
+            "Assets changed and saved: " & CStr(successCount) & vbCrLf & _
+            "Backup and report: " & backupRoot & vbCrLf & vbCrLf & _
+            "Run Asset / Project classification preview again.", _
+            vbInformation, "Set All Asset Versions To 1"
+    Else
+        MsgBox "Asset version reset completed with failures." & vbCrLf & vbCrLf & _
+            "Succeeded: " & CStr(successCount) & vbCrLf & _
+            "Failed: " & CStr(failureCount) & vbCrLf & _
+            "Full report: " & reportPath, vbCritical, "Set All Asset Versions To 1"
+    End If
+    Exit Sub
+
+FatalError:
+    fatalMessage = Err.Description
+    On Error Resume Next
+    If Not root Is Nothing Then RestoreRoot root
+    MsgBox "The macro stopped before completion: " & fatalMessage, _
+        vbCritical, "Set All Asset Versions To 1"
+End Sub
+
+Function CreateDictionary() As Object
+    Dim value As Object
+    Set value = CreateObject("Scripting.Dictionary")
+    value.CompareMode = 1
+    Set CreateDictionary = value
+End Function
+
+Sub AppendLine(ByRef target As String, ByVal value As String)
+    If Len(target) > 0 Then target = target & vbCrLf
+    target = target & value
+End Sub
+
+Sub AddDocumentByPath(ByRef documents As Object, ByVal document As Object, _
+    ByRef issues As String)
+    Dim path As String
+    path = Trim$(CStr(document.GetPathName))
+    If Len(path) = 0 Then
+        AppendLine issues, "Asset is virtual or unsaved: " & CStr(document.GetTitle)
+    ElseIf Dir$(path) = "" Then
+        AppendLine issues, "Asset source file does not exist: " & path
+    ElseIf Not documents.Exists(path) Then
+        documents.Add path, document
+    End If
+End Sub
+
+Sub CollectChildren(ByVal parentComponent As Object, ByRef assets As Object, _
+    ByRef visitedBranches As Object, ByRef issues As String)
+    Dim children As Variant, child As Variant
+
+    On Error Resume Next
+    children = parentComponent.GetChildren
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot enumerate children of " & CStr(parentComponent.Name2) & _
+            ": " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+    If IsEmpty(children) Or IsNull(children) Then Exit Sub
+    If Not IsArray(children) Then Exit Sub
+
+    For Each child In children
+        If Not child Is Nothing Then
+            CollectComponent child, assets, visitedBranches, issues
+        End If
+    Next child
+End Sub
+
+Sub CollectComponent(ByVal component As Object, ByRef assets As Object, _
+    ByRef visitedBranches As Object, ByRef issues As String)
+    Dim suppression As Long, visibility As Long
+    Dim isEnvelope As Boolean
+    Dim document As Object
+    Dim issue As String, path As String, configuration As String, branchKey As String
+
+    suppression = -1
+    visibility = -1
+    isEnvelope = False
+    On Error Resume Next
+    suppression = CLng(component.GetSuppression2)
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot read component suppression state: " & _
+            CStr(component.Name2) & "; " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    visibility = CLng(component.Visible)
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot read component visibility: " & _
+            CStr(component.Name2) & "; " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    isEnvelope = CBool(component.IsEnvelope())
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot read component envelope state: " & _
+            CStr(component.Name2) & "; " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+    If suppression = SW_COMPONENT_SUPPRESSED Then Exit Sub
+    If visibility <> SW_COMPONENT_VISIBLE Then Exit Sub
+    If isEnvelope Then Exit Sub
+
+    Set document = Nothing
+    On Error Resume Next
+    Set document = component.GetModelDoc2
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot access component model: " & CStr(component.Name2) & _
+            "; " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+    If document Is Nothing Then
+        AppendLine issues, "Unresolved, virtual, or unsaved component: " & CStr(component.Name2)
+        Exit Sub
+    End If
+
+    issue = ""
+    If IsAssetDocument(document, issue) Then
+        AddDocumentByPath assets, document, issues
+        Exit Sub
+    End If
+    If Len(issue) > 0 Then
+        AppendLine issues, issue
+        Exit Sub
+    End If
+    If CLng(document.GetType) <> SW_DOC_ASSEMBLY Then Exit Sub
+
+    path = LCase$(Trim$(CStr(document.GetPathName)))
+    configuration = ""
+    On Error Resume Next
+    configuration = LCase$(Trim$(CStr(component.ReferencedConfiguration)))
+    Err.Clear
+    On Error GoTo 0
+    branchKey = path & "|" & configuration
+    If visitedBranches.Exists(branchKey) Then Exit Sub
+    visitedBranches.Add branchKey, True
+
+    ' The child query is deliberately after the Asset check above.
+    CollectChildren component, assets, visitedBranches, issues
+End Sub
+
+Function IsAssetDocument(ByVal document As Object, ByRef issue As String) As Boolean
+    Dim manager As Object
+    Dim exists As Boolean, actualName As String
+    Dim rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean
+    Dim value As String
+
+    Set manager = Nothing
+    On Error Resume Next
+    Set manager = document.Extension.CustomPropertyManager("")
+    If Err.Number <> 0 Or manager Is Nothing Then
+        issue = "Cannot access file-level custom properties: " & CStr(document.GetPathName)
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    If Not TryReadProperty(manager, "is_asset", exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then Exit Function
+    If Not exists Then Exit Function
+
+    If wasResolved And Len(Trim$(resolvedValue)) > 0 Then
+        value = Trim$(resolvedValue)
+    Else
+        value = Trim$(rawValue)
+    End If
+    IsAssetDocument = (StrComp(value, "true", vbTextCompare) = 0 Or _
+        StrComp(value, "yes", vbTextCompare) = 0 Or value = "1")
+End Function
+
+Function AssetVersionNeedsReset(ByVal document As Object, ByRef issue As String) As Boolean
+    Dim manager As Object
+    Dim exists As Boolean, actualName As String
+    Dim rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean
+
+    Set manager = Nothing
+    On Error Resume Next
+    Set manager = document.Extension.CustomPropertyManager("")
+    If Err.Number <> 0 Or manager Is Nothing Then
+        issue = "Cannot access file-level custom properties: " & CStr(document.GetPathName)
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    If Not TryReadProperty(manager, "asset_version", exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then Exit Function
+    AssetVersionNeedsReset = (Not exists Or Trim$(rawValue) <> "1")
+End Function
+
+Function TryReadProperty(ByVal manager As Object, ByVal desiredName As String, _
+    ByRef exists As Boolean, ByRef actualName As String, ByRef rawValue As String, _
+    ByRef resolvedValue As String, ByRef wasResolved As Boolean, ByRef issue As String) As Boolean
+    Dim names As Variant, name As Variant
+    Dim linked As Boolean, status As Long
+
+    exists = False
+    actualName = ""
+    rawValue = ""
+    resolvedValue = ""
+    wasResolved = False
+    issue = ""
+
+    On Error GoTo Failed
+    names = manager.GetNames
+    If Not IsEmpty(names) And Not IsNull(names) Then
+        If IsArray(names) Then
+            For Each name In names
+                If StrComp(CStr(name), desiredName, vbTextCompare) = 0 Then
+                    exists = True
+                    actualName = CStr(name)
+                    Exit For
+                End If
+            Next name
+        End If
+    End If
+    If Not exists Then
+        TryReadProperty = True
+        Exit Function
+    End If
+
+    status = CLng(manager.Get6(actualName, False, rawValue, resolvedValue, wasResolved, linked))
+    TryReadProperty = True
+    Exit Function
+
+Failed:
+    issue = "Failed to read file-level property [" & desiredName & "]: " & Err.Description
+    TryReadProperty = False
+End Function
+
+Function ValidateTargets(ByVal targets As Object) As String
+    Dim key As Variant, document As Object
+    Dim path As String, problems As String
+    Dim attributes As Long
+
+    For Each key In targets.Keys
+        Set document = targets.Item(key)
+        path = CStr(key)
+        If Len(path) = 0 Or Dir$(path) = "" Then
+            AppendLine problems, "Missing or unsaved: " & path
+        Else
+            On Error Resume Next
+            Err.Clear
+            attributes = GetAttr(path)
+            If Err.Number <> 0 Then
+                AppendLine problems, "Cannot inspect file attributes: " & path & "; " & Err.Description
+                Err.Clear
+            ElseIf (attributes And vbReadOnly) <> 0 Then
+                AppendLine problems, "Read-only: " & path
+            End If
+            If CBool(document.GetSaveFlag) Then
+                AppendLine problems, "Unsaved changes already exist: " & path
+            End If
+            If Err.Number <> 0 Then
+                AppendLine problems, "Cannot inspect save state: " & path & "; " & Err.Description
+                Err.Clear
+            End If
+            On Error GoTo 0
+        End If
+    Next key
+    ValidateTargets = problems
+End Function
+
+Function CreateBackupFolder() As String
+    Dim fso As Object
+    Dim basePath As String, path As String
+    Dim suffix As Long
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    basePath = Environ$("USERPROFILE") & "\Desktop\SolidWorksAssetVersionBackup_" & _
+        Format$(Now, "yyyymmdd_hhnnss")
+    path = basePath
+    suffix = 1
+    Do While fso.FolderExists(path)
+        path = basePath & "_" & CStr(suffix)
+        suffix = suffix + 1
+    Loop
+    fso.CreateFolder path
+    CreateBackupFolder = path
+End Function
+
+Function BackupTargets(ByVal targets As Object, ByVal backupRoot As String, _
+    ByRef issue As String) As Boolean
+    Dim fso As Object
+    Dim key As Variant
+    Dim sourcePath As String, destination As String
+    Dim manifest As String
+    Dim index As Long
+
+    On Error GoTo Failed
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    manifest = "Index,OriginalPath,BackupPath" & vbCrLf
+    For Each key In targets.Keys
+        index = index + 1
+        sourcePath = CStr(key)
+        destination = backupRoot & "\" & Format$(index, "0000") & "_" & _
+            fso.GetFileName(sourcePath)
+        fso.CopyFile sourcePath, destination, False
+        If Not fso.FileExists(destination) Then
+            Err.Raise vbObjectError + 501, , "Backup copy was not created: " & sourcePath
+        End If
+        manifest = manifest & CStr(index) & "," & CsvValue(sourcePath) & "," & _
+            CsvValue(destination) & vbCrLf
+    Next key
+    WriteUtf8 backupRoot & "\manifest.csv", manifest
+    BackupTargets = True
+    Exit Function
+
+Failed:
+    issue = "Source: " & sourcePath & vbCrLf & "Error: " & Err.Description
+    BackupTargets = False
+End Function
+
+Function CsvValue(ByVal value As String) As String
+    CsvValue = """" & Replace(value, """", """""") & """"
+End Function
+
+Function ResetAssetVersion(ByVal document As Object, ByRef issue As String) As Boolean
+    Dim manager As Object
+    Dim exists As Boolean, actualName As String
+    Dim rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean
+    Dim status As Long, errors As Long, warnings As Long
+    Dim saved As Boolean
+    Dim path As String
+
+    On Error GoTo Failed
+    path = CStr(document.GetPathName)
+    Set manager = document.Extension.CustomPropertyManager("")
+    If manager Is Nothing Then Err.Raise vbObjectError + 601, , _
+        "File-level property manager is unavailable."
+
+    If Not TryReadProperty(manager, "asset_version", exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then GoTo FailedWithIssue
+
+    If exists Then
+        status = CLng(manager.Set2(actualName, "1"))
+        If status <> 0 Then
+            Err.Raise vbObjectError + 602, , "Set2 failed; status=" & CStr(status)
+        End If
+    Else
+        status = CLng(manager.Add3("asset_version", SW_CUSTOM_INFO_TEXT, "1", _
+            SW_CUSTOM_PROPERTY_ONLY_IF_NEW))
+        If status <> 0 Then
+            Err.Raise vbObjectError + 603, , "Add3 failed; status=" & CStr(status)
+        End If
+    End If
+
+    errors = 0
+    warnings = 0
+    saved = CBool(document.Save3(SW_SAVE_SILENT, errors, warnings))
+    If Not saved Or errors <> 0 Then
+        Err.Raise vbObjectError + 604, , "Save3 failed; errors=" & CStr(errors) & _
+            "; warnings=" & CStr(warnings)
+    End If
+
+    If Not TryReadProperty(manager, "asset_version", exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then GoTo FailedWithIssue
+    If Not exists Or Trim$(rawValue) <> "1" Then
+        Err.Raise vbObjectError + 605, , _
+            "asset_version verification did not equal 1 after save."
+    End If
+
+    ResetAssetVersion = True
+    Exit Function
+
+Failed:
+    issue = "Version reset failed for " & path & ": " & Err.Description
+FailedWithIssue:
+    If Len(issue) = 0 Then issue = "Version reset failed for " & path & "."
+    ResetAssetVersion = False
+End Function
+
+Function BuildReport(ByVal root As Object, ByVal assetCount As Long, _
+    ByVal targetCount As Long, ByVal successCount As Long, ByVal failureCount As Long, _
+    ByVal targetList As String, ByVal successList As String, ByVal failureList As String, _
+    ByVal backupRoot As String) As String
+    BuildReport = "SOLIDWORKS Asset file-level asset_version reset" & vbCrLf & _
+        "Completed: " & Format$(Now, "yyyy-mm-dd hh:nn:ss") & vbCrLf & _
+        "Top-level model: " & CStr(root.GetPathName) & vbCrLf & _
+        "Unique Assets scanned: " & CStr(assetCount) & vbCrLf & _
+        "Applied property: asset_version=1" & vbCrLf & _
+        "assembly_version changed: no" & vbCrLf & _
+        "Other properties changed: no" & vbCrLf & _
+        "Configuration-specific properties accessed: no" & vbCrLf & _
+        "Backup folder: " & backupRoot & vbCrLf & vbCrLf & _
+        "Targets: " & CStr(targetCount) & vbCrLf & targetList & vbCrLf & vbCrLf & _
+        "Succeeded: " & CStr(successCount) & vbCrLf & successList & vbCrLf & vbCrLf & _
+        "Failed: " & CStr(failureCount) & vbCrLf & failureList & vbCrLf
+End Function
+
+Sub RestoreRoot(ByVal root As Object)
+    Dim activateErrors As Long
+    On Error Resume Next
+    swApp.ActivateDoc3 CStr(root.GetTitle), False, 1, activateErrors
+    On Error GoTo 0
+End Sub
+
+Sub WriteUtf8(ByVal path As String, ByVal content As String)
+    Dim stream As Object
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2
+    stream.Charset = "utf-8"
+    stream.Open
+    stream.WriteText content
+    stream.SaveToFile path, 2
+    stream.Close
+End Sub

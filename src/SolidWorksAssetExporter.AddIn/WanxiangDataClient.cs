@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -27,6 +29,7 @@ namespace SolidWorksAssetExporter.AddIn
         [DataMember(Name = "path")] public string Path { get; set; }
         [DataMember(Name = "files_extracted")] public int FilesExtracted { get; set; }
         [DataMember(Name = "bytes_written")] public long BytesWritten { get; set; }
+        [IgnoreDataMember] public int HttpStatusCode { get; set; }
     }
 
     public sealed class WanxiangRegistryDownloadResult
@@ -36,18 +39,11 @@ namespace SolidWorksAssetExporter.AddIn
     }
 
     [DataContract]
-    public sealed class WanxiangAssetRegistrationRequest
-    {
-        [DataMember(Name = "uuid", Order = 1)] public string Uuid { get; set; }
-        [DataMember(Name = "version", Order = 2)] public int Version { get; set; }
-        [DataMember(Name = "content_fingerprint", Order = 3)] public string ContentFingerprint { get; set; }
-    }
-
-    [DataContract]
     public sealed class WanxiangAssetRegistrationResult
     {
         [DataMember(Name = "status", Order = 1)] public string Status { get; set; }
         [DataMember(Name = "registration", Order = 2)] public AssetRegistration Registration { get; set; }
+        [IgnoreDataMember] public int HttpStatusCode { get; set; }
     }
 
     public sealed class WanxiangDataServiceException : Exception
@@ -99,13 +95,25 @@ namespace SolidWorksAssetExporter.AddIn
     {
         private readonly string _baseUrl;
         private readonly HttpClient _http;
+        private readonly Action<string> _diagnostic;
 
         public WanxiangDataClient(string baseUrl, string apiKey)
-            : this(baseUrl, apiKey, CreateHandler())
+            : this(baseUrl, apiKey, CreateHandler(), null)
         {
         }
 
         public WanxiangDataClient(string baseUrl, string apiKey, HttpMessageHandler handler)
+            : this(baseUrl, apiKey, handler, null)
+        {
+        }
+
+        public WanxiangDataClient(string baseUrl, string apiKey, Action<string> diagnostic)
+            : this(baseUrl, apiKey, CreateHandler(), diagnostic)
+        {
+        }
+
+        public WanxiangDataClient(string baseUrl, string apiKey, HttpMessageHandler handler,
+            Action<string> diagnostic)
         {
             Uri parsed;
             if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out parsed) ||
@@ -115,34 +123,65 @@ namespace SolidWorksAssetExporter.AddIn
             if (handler == null) throw new ArgumentNullException("handler");
 
             _baseUrl = baseUrl.Trim().TrimEnd('/');
+            _diagnostic = diagnostic;
             _http = new HttpClient(handler, true) { Timeout = TimeSpan.FromMinutes(30) };
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
         }
 
         public WanxiangDirectoryUploadResult UploadDirectory(string localDirectory, string remoteDirectory)
         {
+            return UploadDirectory(localDirectory, remoteDirectory, null);
+        }
+
+        public WanxiangDirectoryUploadResult UploadDirectory(string localDirectory, string remoteDirectory,
+            Action<string> progress)
+        {
             localDirectory = Path.GetFullPath(localDirectory);
             if (!Directory.Exists(localDirectory)) throw new DirectoryNotFoundException("待上传目录不存在：" + localDirectory);
+            var requestUri = Url("archive", remoteDirectory);
             var archivePath = Path.Combine(Path.GetTempPath(), "wanxiang-upload-" + Guid.NewGuid().ToString("N") + ".zip");
+            var elapsed = Stopwatch.StartNew();
             try
             {
+                Report(progress, "正在打包 Project...");
+                Diagnostic("PROJECT PACK START local=" + localDirectory + " remote=" + remoteDirectory);
                 CreateArchive(localDirectory, archivePath);
+                var archiveBytes = new FileInfo(archivePath).Length;
+                Diagnostic("PROJECT PACK COMPLETE bytes=" + archiveBytes.ToString(CultureInfo.InvariantCulture) +
+                    " elapsed_ms=" + elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+                Report(progress, "Project 打包完成（" + FormatBytes(archiveBytes) + "），正在发送到 Wanxiang...");
                 using (var stream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var content = new StreamContent(stream))
-                using (var request = new HttpRequestMessage(HttpMethod.Put, Url("archive", remoteDirectory)))
+                using (var request = new HttpRequestMessage(HttpMethod.Put, requestUri))
                 {
                     content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
                     request.Content = content;
-                    using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+                    Diagnostic("HTTP REQUEST PUT " + requestUri.AbsoluteUri + " bytes=" +
+                        archiveBytes.ToString(CultureInfo.InvariantCulture));
+                    using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseContentRead).GetAwaiter().GetResult())
                     {
                         var body = ReadBody(response);
+                        DiagnosticResponse("PROJECT", request.Method, requestUri, response, body, elapsed);
+                        Report(progress, "Project 已收到 HTTP " + ((int)response.StatusCode).ToString(
+                            CultureInfo.InvariantCulture) + "，正在校验响应...");
                         EnsureSuccess(response, body);
-                        return Deserialize<WanxiangDirectoryUploadResult>(body);
+                        var result = Deserialize<WanxiangDirectoryUploadResult>(body);
+                        result.HttpStatusCode = (int)response.StatusCode;
+                        Report(progress, "Project 上传完成：HTTP " + result.HttpStatusCode.ToString(
+                            CultureInfo.InvariantCulture) + "，服务端写入 " + result.FilesExtracted.ToString(
+                            CultureInfo.InvariantCulture) + " 个文件。");
+                        return result;
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                DiagnosticFailure("PROJECT", "PUT", requestUri, elapsed, ex);
+                throw;
+            }
             finally
             {
+                elapsed.Stop();
                 if (File.Exists(archivePath)) File.Delete(archivePath);
             }
         }
@@ -157,7 +196,7 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
                 request.Content = content;
-                using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+                using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseContentRead).GetAwaiter().GetResult())
                 {
                     var body = ReadBody(response);
                     EnsureSuccess(response, body);
@@ -215,14 +254,18 @@ namespace SolidWorksAssetExporter.AddIn
             var directory = Path.GetDirectoryName(localPath);
             if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
             var temporary = localPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var requestUri = Endpoint("asset/registry");
+            var elapsed = Stopwatch.StartNew();
             try
             {
-                using (var request = new HttpRequestMessage(HttpMethod.Get, Endpoint("asset/registry")))
-                using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+                Diagnostic("HTTP REQUEST GET " + requestUri.AbsoluteUri);
+                using (var request = new HttpRequestMessage(HttpMethod.Get, requestUri))
+                using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseContentRead).GetAwaiter().GetResult())
                 {
                     if (!response.IsSuccessStatusCode)
                     {
                         var body = ReadBody(response);
+                        DiagnosticResponse("REGISTRY", request.Method, requestUri, response, body, elapsed);
                         throw new WanxiangDataServiceException(response.StatusCode, body);
                     }
                     IEnumerable<string> existsHeaders;
@@ -240,55 +283,157 @@ namespace SolidWorksAssetExporter.AddIn
                     if (string.IsNullOrWhiteSpace(etag) ||
                         !string.Equals(FileHash.Sha256(temporary), etag, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("Wanxiang 资产注册表响应的 ETag 与下载内容不一致。");
+                    DiagnosticResponse("REGISTRY", request.Method, requestUri, response,
+                        "<registry bytes=" + new FileInfo(temporary).Length.ToString(
+                            CultureInfo.InvariantCulture) + ">", elapsed);
                     if (File.Exists(localPath)) File.Replace(temporary, localPath, null);
                     else File.Move(temporary, localPath);
                     return new WanxiangRegistryDownloadResult { Exists = exists, ETag = etag };
                 }
             }
+            catch (Exception ex)
+            {
+                DiagnosticFailure("REGISTRY", "GET", requestUri, elapsed, ex);
+                throw;
+            }
             finally
             {
+                elapsed.Stop();
                 if (File.Exists(temporary)) File.Delete(temporary);
             }
         }
 
-        public WanxiangAssetRegistrationResult RegisterAssetVersion(string uuid, int version,
-            string contentFingerprint)
+        public WanxiangAssetRegistrationResult PublishAssetVersion(string localDirectory, string uuid,
+            int version, string contentFingerprint)
         {
+            localDirectory = Path.GetFullPath(localDirectory);
+            if (!Directory.Exists(localDirectory))
+                throw new DirectoryNotFoundException("待发布 Asset 版本目录不存在：" + localDirectory);
             Guid parsedUuid;
             if (!Guid.TryParse(uuid, out parsedUuid)) throw new ArgumentException("Asset UUID 无效：" + uuid);
             if (version <= 0) throw new ArgumentOutOfRangeException("version", "Asset 版本必须是正整数。");
             if (string.IsNullOrWhiteSpace(contentFingerprint))
                 throw new ArgumentException("Asset 内容指纹不能为空。", "contentFingerprint");
-            var body = Serialize(new WanxiangAssetRegistrationRequest
+            var normalizedUuid = parsedUuid.ToString("D");
+            var expectedDirectoryName = "v" + version.ToString(CultureInfo.InvariantCulture);
+            if (!string.Equals(Path.GetFileName(localDirectory.TrimEnd(Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar)), expectedDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetFileName(Path.GetDirectoryName(localDirectory)), normalizedUuid,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new ValidationException("待发布 Asset 目录必须使用 <uuid>/v<version> 布局：" + localDirectory);
+
+            var archivePath = Path.Combine(Path.GetTempPath(), "wanxiang-asset-publish-" +
+                Guid.NewGuid().ToString("N") + ".zip");
+            var requestUri = Endpoint("asset/" + Uri.EscapeDataString(normalizedUuid) + "/v" +
+                version.ToString(CultureInfo.InvariantCulture));
+            var elapsed = Stopwatch.StartNew();
+            try
             {
-                Uuid = parsedUuid.ToString("D"),
-                Version = version,
-                ContentFingerprint = contentFingerprint
-            });
-            using (var content = new StringContent(body, Encoding.UTF8, "application/json"))
-            using (var request = new HttpRequestMessage(HttpMethod.Post, Endpoint("asset/registry")))
-            {
-                request.Content = content;
-                using (var response = _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+                Diagnostic("ASSET PACK START asset_id=" + normalizedUuid + ":" +
+                    version.ToString(CultureInfo.InvariantCulture) + " local=" + localDirectory);
+                CreateArchive(localDirectory, archivePath);
+                var archiveBytes = new FileInfo(archivePath).Length;
+                Diagnostic("ASSET PACK COMPLETE asset_id=" + normalizedUuid + ":" +
+                    version.ToString(CultureInfo.InvariantCulture) + " bytes=" +
+                    archiveBytes.ToString(CultureInfo.InvariantCulture) + " elapsed_ms=" +
+                    elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+                using (var stream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var content = new StreamContent(stream))
+                using (var request = new HttpRequestMessage(HttpMethod.Put, requestUri))
                 {
-                    var responseBody = ReadBody(response);
-                    EnsureSuccess(response, responseBody);
-                    var result = Deserialize<WanxiangAssetRegistrationResult>(responseBody);
-                    if (result == null || result.Registration == null ||
-                        (result.Status != "registered" && result.Status != "already_registered") ||
-                        !string.Equals(result.Registration.Uuid, parsedUuid.ToString("D"), StringComparison.OrdinalIgnoreCase) ||
-                        result.Registration.Version != version ||
-                        !string.Equals(result.Registration.ContentFingerprint, contentFingerprint,
-                            StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException("Wanxiang 资产注册响应与请求的 UUID、版本或指纹不一致。");
-                    return result;
+                    content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+                    request.Headers.Add("X-Content-Fingerprint", contentFingerprint.Trim());
+                    request.Content = content;
+                    Diagnostic("HTTP REQUEST PUT " + requestUri.AbsoluteUri + " bytes=" +
+                        archiveBytes.ToString(CultureInfo.InvariantCulture) + " fingerprint=" +
+                        contentFingerprint.Trim());
+                    using (var response = _http.SendAsync(request,
+                        HttpCompletionOption.ResponseContentRead).GetAwaiter().GetResult())
+                    {
+                        var responseBody = ReadBody(response);
+                        DiagnosticResponse("ASSET", request.Method, requestUri, response, responseBody, elapsed);
+                        EnsureSuccess(response, responseBody);
+                        var result = Deserialize<WanxiangAssetRegistrationResult>(responseBody);
+                        var expectedStatus = response.StatusCode == HttpStatusCode.Created
+                            ? "registered" : "already_registered";
+                        var expectedAssetId = normalizedUuid + ":" +
+                            version.ToString(CultureInfo.InvariantCulture);
+                        var expectedRelativeDirectory = normalizedUuid + "/v" +
+                            version.ToString(CultureInfo.InvariantCulture);
+                        if ((response.StatusCode != HttpStatusCode.Created && response.StatusCode != HttpStatusCode.OK) ||
+                            result == null || result.Registration == null || result.Status != expectedStatus ||
+                            !string.Equals(result.Registration.AssetId, expectedAssetId,
+                                StringComparison.OrdinalIgnoreCase) ||
+                            !string.Equals(result.Registration.Uuid, normalizedUuid,
+                                StringComparison.OrdinalIgnoreCase) || result.Registration.Version != version ||
+                            string.IsNullOrWhiteSpace(result.Registration.Name) ||
+                            !string.Equals((result.Registration.RelativeDirectory ?? string.Empty).Replace('\\', '/'),
+                                expectedRelativeDirectory, StringComparison.OrdinalIgnoreCase) ||
+                            !string.Equals(result.Registration.ContentFingerprint, contentFingerprint,
+                                StringComparison.OrdinalIgnoreCase) ||
+                            string.IsNullOrWhiteSpace(result.Registration.RegisteredUtc))
+                            throw new InvalidDataException(
+                                "Wanxiang 资产发布响应与请求的 UUID、版本、名称、目录或指纹不一致。");
+                        result.HttpStatusCode = (int)response.StatusCode;
+                        return result;
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                DiagnosticFailure("ASSET", "PUT", requestUri, elapsed, ex);
+                throw;
+            }
+            finally
+            {
+                elapsed.Stop();
+                if (File.Exists(archivePath)) File.Delete(archivePath);
             }
         }
 
         public void Dispose()
         {
             _http.Dispose();
+        }
+
+        private void Diagnostic(string message)
+        {
+            if (_diagnostic == null) return;
+            try { _diagnostic(message); }
+            catch { }
+        }
+
+        private void DiagnosticResponse(string operation, HttpMethod method, Uri uri,
+            HttpResponseMessage response, string body, Stopwatch elapsed)
+        {
+            Diagnostic(operation + " RESPONSE " + method.Method + " " + uri.AbsoluteUri +
+                " http_status=" + ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture) +
+                " reason=" + (response.ReasonPhrase ?? string.Empty) + " elapsed_ms=" +
+                elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " body=" +
+                WanxiangUploadLog.SummarizeResponse(body));
+        }
+
+        private void DiagnosticFailure(string operation, string method, Uri uri,
+            Stopwatch elapsed, Exception exception)
+        {
+            Diagnostic(operation + " FAILED " + method + " " + uri.AbsoluteUri + " elapsed_ms=" +
+                elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " exception=" +
+                exception.GetType().Name + " message=" +
+                WanxiangUploadLog.SummarizeResponse(exception.Message));
+        }
+
+        private static void Report(Action<string> progress, string message)
+        {
+            if (progress == null) return;
+            try { progress(message); }
+            catch { }
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+            if (bytes < 1024L * 1024L) return (bytes / 1024d).ToString("0.0", CultureInfo.InvariantCulture) + " KB";
+            return (bytes / (1024d * 1024d)).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
         }
 
         private Uri Url(string space, string remotePath)
@@ -327,16 +472,6 @@ namespace SolidWorksAssetExporter.AddIn
             catch (Exception ex)
             {
                 throw new InvalidDataException("Wanxiang 数据服务响应无法解析：" + ex.Message);
-            }
-        }
-
-        private static string Serialize<T>(T value)
-        {
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream())
-            {
-                serializer.WriteObject(stream, value);
-                return Encoding.UTF8.GetString(stream.ToArray());
             }
         }
 

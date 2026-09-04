@@ -1,0 +1,625 @@
+Option Explicit
+
+' SOLIDWORKS VBA text macro.
+' Repairs only the file-level custom property named "Part Name" in Chinese
+' (Unicode: U+96F6 U+4EF6 U+540D) for Asset roots whose is_asset value is
+' true/yes/1. It never reads or writes configuration-specific properties and
+' never changes asset_version.
+
+Dim swApp As Object
+
+Const SW_DOC_PART As Long = 1
+Const SW_DOC_ASSEMBLY As Long = 2
+Const SW_OPEN_SILENT As Long = 1
+Const SW_SAVE_SILENT As Long = 1
+Const SW_CUSTOM_INFO_TEXT As Long = 30
+Const SW_CUSTOM_PROPERTY_ONLY_IF_NEW As Long = 0
+
+Sub main()
+    Dim root As Object
+    Dim assets As Object, targets As Object, visitedBranches As Object, openedDocs As Object
+    Dim rootComponent As Object
+    Dim key As Variant, document As Object
+    Dim issue As String, scanIssues As String, preflightIssues As String
+    Dim targetList As String, successList As String, failureList As String
+    Dim backupRoot As String, reportPath As String
+    Dim targetCount As Long, successCount As Long, failureCount As Long
+    Dim answer As VbMsgBoxResult
+    Dim fatalMessage As String
+
+    On Error GoTo FatalError
+    Set swApp = Application.SldWorks
+    Set root = swApp.ActiveDoc
+    If root Is Nothing Then
+        MsgBox "Open the top-level part or assembly in SOLIDWORKS first.", _
+            vbExclamation, "Repair Asset Part Names"
+        Exit Sub
+    End If
+    If CLng(root.GetType) <> SW_DOC_PART And CLng(root.GetType) <> SW_DOC_ASSEMBLY Then
+        MsgBox "The active document must be a SOLIDWORKS part or assembly.", _
+            vbExclamation, "Repair Asset Part Names"
+        Exit Sub
+    End If
+
+    Set assets = CreateDictionary()
+    Set targets = CreateDictionary()
+    Set visitedBranches = CreateDictionary()
+    Set openedDocs = CreateDictionary()
+
+    ' Resolve lightweight components only for reliable traversal. The macro
+    ' never saves the top-level assembly unless it is itself a repair target.
+    If CLng(root.GetType) = SW_DOC_ASSEMBLY Then
+        On Error Resume Next
+        root.ResolveAllLightWeightComponents False
+        Err.Clear
+        On Error GoTo FatalError
+    End If
+
+    issue = ""
+    If IsAssetDocument(root, issue) Then
+        AddDocumentByPath assets, root, scanIssues
+    Else
+        If Len(issue) > 0 Then AppendLine scanIssues, issue
+        If CLng(root.GetType) = SW_DOC_ASSEMBLY Then
+            Set rootComponent = Nothing
+            On Error Resume Next
+            Set rootComponent = root.ConfigurationManager.ActiveConfiguration.GetRootComponent3(True)
+            If Err.Number <> 0 Then
+                AppendLine scanIssues, "Cannot obtain the root component: " & Err.Description
+                Err.Clear
+            End If
+            On Error GoTo FatalError
+            If Not rootComponent Is Nothing Then
+                CollectChildren rootComponent, assets, visitedBranches, openedDocs, scanIssues
+            End If
+        End If
+    End If
+
+    For Each key In assets.Keys
+        Set document = assets.Item(key)
+        issue = ""
+        If PartNameNeedsRepair(document, issue) Then
+            targets.Add CStr(key), document
+            targetCount = targetCount + 1
+            AppendLine targetList, CStr(key)
+        ElseIf Len(issue) > 0 Then
+            AppendLine scanIssues, issue
+        End If
+    Next key
+
+    If Len(scanIssues) > 0 Then
+        reportPath = Environ$("TEMP") & "\SolidWorksAssetPartNameRepair-preflight.txt"
+        WriteUtf8 reportPath, "No model was changed." & vbCrLf & vbCrLf & _
+            "The complete Asset scan could not be guaranteed:" & vbCrLf & scanIssues
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Preflight found one or more scan errors. No model was changed." & vbCrLf & _
+            "Details: " & reportPath, vbCritical, "Repair Asset Part Names"
+        Exit Sub
+    End If
+
+    If targetCount = 0 Then
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Every detected Asset already has a non-blank file-level custom property [" & _
+            PartNameProperty() & "]. No model was changed.", _
+            vbInformation, "Repair Asset Part Names"
+        Exit Sub
+    End If
+
+    preflightIssues = ValidateTargets(targets)
+    If Len(preflightIssues) > 0 Then
+        reportPath = Environ$("TEMP") & "\SolidWorksAssetPartNameRepair-preflight.txt"
+        WriteUtf8 reportPath, "No model was changed." & vbCrLf & vbCrLf & _
+            "Target validation failed:" & vbCrLf & preflightIssues
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Target validation failed. No model was changed." & vbCrLf & _
+            "Details: " & reportPath, vbCritical, "Repair Asset Part Names"
+        Exit Sub
+    End If
+
+    answer = MsgBox("Detected " & CStr(targetCount) & " Asset file(s) whose file-level [" & _
+        PartNameProperty() & "] property is missing or blank." & vbCrLf & vbCrLf & _
+        "The macro will:" & vbCrLf & _
+        "1. Back up every target source file." & vbCrLf & _
+        "2. Add or reset only [" & PartNameProperty() & "] to " & PartNameExpression() & "." & vbCrLf & _
+        "3. Save each repaired Asset." & vbCrLf & vbCrLf & _
+        "asset_version and all configuration-specific properties will remain unchanged." & vbCrLf & vbCrLf & _
+        "Continue?", vbYesNo + vbExclamation + vbDefaultButton2, "Repair Asset Part Names")
+    If answer <> vbYes Then
+        RestoreRootAndCloseOpened root, openedDocs
+        Exit Sub
+    End If
+
+    backupRoot = CreateBackupFolder()
+    issue = ""
+    If Not BackupTargets(targets, backupRoot, issue) Then
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Backup failed. No model was changed." & vbCrLf & issue & vbCrLf & _
+            "Backup folder: " & backupRoot, vbCritical, "Repair Asset Part Names"
+        Exit Sub
+    End If
+
+    For Each key In targets.Keys
+        Set document = targets.Item(key)
+        issue = ""
+        If RepairPartName(document, issue) Then
+            successCount = successCount + 1
+            AppendLine successList, CStr(key)
+        Else
+            failureCount = failureCount + 1
+            AppendLine failureList, CStr(key) & vbCrLf & "  " & issue
+        End If
+    Next key
+
+    reportPath = backupRoot & "\repair-report.txt"
+    WriteUtf8 reportPath, BuildReport(root, targetCount, successCount, failureCount, _
+        targetList, successList, failureList, backupRoot)
+    RestoreRootAndCloseOpened root, openedDocs
+
+    If failureCount = 0 Then
+        MsgBox "Repair completed successfully." & vbCrLf & vbCrLf & _
+            "Assets repaired and saved: " & CStr(successCount) & vbCrLf & _
+            "Backup and report: " & backupRoot & vbCrLf & vbCrLf & _
+            "Run Asset / Project classification preview again.", _
+            vbInformation, "Repair Asset Part Names"
+    Else
+        MsgBox "Repair completed with failures." & vbCrLf & vbCrLf & _
+            "Succeeded: " & CStr(successCount) & vbCrLf & _
+            "Failed: " & CStr(failureCount) & vbCrLf & _
+            "Full report: " & reportPath, vbCritical, "Repair Asset Part Names"
+    End If
+    Exit Sub
+
+FatalError:
+    fatalMessage = Err.Description
+    On Error Resume Next
+    If Not root Is Nothing And Not openedDocs Is Nothing Then
+        RestoreRootAndCloseOpened root, openedDocs
+    End If
+    MsgBox "The macro stopped before completion: " & fatalMessage, _
+        vbCritical, "Repair Asset Part Names"
+End Sub
+
+Function CreateDictionary() As Object
+    Dim value As Object
+    Set value = CreateObject("Scripting.Dictionary")
+    value.CompareMode = 1
+    Set CreateDictionary = value
+End Function
+
+Function PartNameProperty() As String
+    ' U+96F6 U+4EF6 U+540D. ChrW avoids source-file encoding problems.
+    PartNameProperty = ChrW(&H96F6) & ChrW(&H4EF6) & ChrW(&H540D)
+End Function
+
+Function PartNameExpression() As String
+    PartNameExpression = "$PRP:""SW-File Name"""
+End Function
+
+Sub AppendLine(ByRef target As String, ByVal value As String)
+    If Len(target) > 0 Then target = target & vbCrLf
+    target = target & value
+End Sub
+
+Sub AddDocumentByPath(ByRef documents As Object, ByVal document As Object, ByRef issues As String)
+    Dim path As String
+    path = Trim$(CStr(document.GetPathName))
+    If Len(path) = 0 Then
+        AppendLine issues, "Asset is virtual or unsaved: " & CStr(document.GetTitle)
+    ElseIf Dir$(path) = "" Then
+        AppendLine issues, "Asset source file does not exist: " & path
+    ElseIf Not documents.Exists(path) Then
+        documents.Add path, document
+    End If
+End Sub
+
+Sub CollectChildren(ByVal parentComponent As Object, ByRef assets As Object, _
+    ByRef visitedBranches As Object, ByRef openedDocs As Object, ByRef issues As String)
+    Dim children As Variant, child As Variant
+
+    On Error Resume Next
+    children = parentComponent.GetChildren
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot enumerate children of " & CStr(parentComponent.Name2) & ": " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+    If IsEmpty(children) Or IsNull(children) Then Exit Sub
+    If Not IsArray(children) Then Exit Sub
+
+    For Each child In children
+        If Not child Is Nothing Then
+            CollectComponent child, assets, visitedBranches, openedDocs, issues
+        End If
+    Next child
+End Sub
+
+Sub CollectComponent(ByVal component As Object, ByRef assets As Object, _
+    ByRef visitedBranches As Object, ByRef openedDocs As Object, ByRef issues As String)
+    Dim suppression As Long
+    Dim document As Object
+    Dim issue As String, path As String, configuration As String, branchKey As String
+
+    suppression = -1
+    On Error Resume Next
+    suppression = CLng(component.GetSuppression2)
+    Err.Clear
+    On Error GoTo 0
+    ' swComponentSuppressed = 0. Suppressed components are not part of the visible export tree.
+    If suppression = 0 Then Exit Sub
+
+    issue = ""
+    Set document = AcquireComponentDocument(component, openedDocs, issue)
+    If document Is Nothing Then
+        AppendLine issues, issue
+        Exit Sub
+    End If
+
+    issue = ""
+    If IsAssetDocument(document, issue) Then
+        AddDocumentByPath assets, document, issues
+        Exit Sub
+    End If
+    If Len(issue) > 0 Then
+        AppendLine issues, issue
+        Exit Sub
+    End If
+    If CLng(document.GetType) <> SW_DOC_ASSEMBLY Then Exit Sub
+
+    path = LCase$(Trim$(CStr(document.GetPathName)))
+    configuration = ""
+    On Error Resume Next
+    configuration = LCase$(Trim$(CStr(component.ReferencedConfiguration)))
+    Err.Clear
+    On Error GoTo 0
+    branchKey = path & "|" & configuration
+    If visitedBranches.Exists(branchKey) Then Exit Sub
+    visitedBranches.Add branchKey, True
+
+    CollectChildren component, assets, visitedBranches, openedDocs, issues
+End Sub
+
+Function AcquireComponentDocument(ByVal component As Object, ByRef openedDocs As Object, _
+    ByRef issue As String) As Object
+    Dim document As Object
+    Dim path As String
+    Dim documentType As Long, errors As Long, warnings As Long
+
+    Set document = Nothing
+    On Error Resume Next
+    Set document = component.GetModelDoc2
+    Err.Clear
+    On Error GoTo 0
+    If Not document Is Nothing Then
+        Set AcquireComponentDocument = document
+        Exit Function
+    End If
+
+    On Error Resume Next
+    path = Trim$(CStr(component.GetPathName))
+    On Error GoTo 0
+    If Len(path) = 0 Then
+        issue = "Unresolved, virtual, or unsaved component: " & CStr(component.Name2)
+        Exit Function
+    End If
+    If Dir$(path) = "" Then
+        issue = "Referenced component file does not exist: " & path
+        Exit Function
+    End If
+
+    documentType = DocumentTypeFromPath(path)
+    If documentType = 0 Then
+        issue = "Unsupported component document type: " & path
+        Exit Function
+    End If
+
+    errors = 0
+    warnings = 0
+    On Error Resume Next
+    Set document = swApp.OpenDoc6(path, documentType, SW_OPEN_SILENT, "", errors, warnings)
+    If Err.Number <> 0 Then
+        issue = "Cannot open component: " & path & "; " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+    If document Is Nothing Or errors <> 0 Then
+        issue = "Cannot open component: " & path & "; errors=" & CStr(errors) & _
+            "; warnings=" & CStr(warnings)
+        Exit Function
+    End If
+    If Not openedDocs.Exists(path) Then openedDocs.Add path, document
+    Set AcquireComponentDocument = document
+End Function
+
+Function DocumentTypeFromPath(ByVal path As String) As Long
+    Dim extension As String
+    extension = LCase$(Mid$(path, InStrRev(path, ".")))
+    If extension = ".sldprt" Then
+        DocumentTypeFromPath = SW_DOC_PART
+    ElseIf extension = ".sldasm" Then
+        DocumentTypeFromPath = SW_DOC_ASSEMBLY
+    Else
+        DocumentTypeFromPath = 0
+    End If
+End Function
+
+Function IsAssetDocument(ByVal document As Object, ByRef issue As String) As Boolean
+    Dim manager As Object
+    Dim exists As Boolean, actualName As String
+    Dim rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean
+    Dim value As String
+
+    Set manager = Nothing
+    On Error Resume Next
+    Set manager = document.Extension.CustomPropertyManager("")
+    If Err.Number <> 0 Or manager Is Nothing Then
+        issue = "Cannot access file-level custom properties: " & CStr(document.GetPathName)
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    If Not TryReadProperty(manager, "is_asset", exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then Exit Function
+    If Not exists Then Exit Function
+
+    If wasResolved And Len(Trim$(resolvedValue)) > 0 Then
+        value = Trim$(resolvedValue)
+    Else
+        value = Trim$(rawValue)
+    End If
+    IsAssetDocument = (StrComp(value, "true", vbTextCompare) = 0 Or _
+        StrComp(value, "yes", vbTextCompare) = 0 Or value = "1")
+End Function
+
+Function PartNameNeedsRepair(ByVal document As Object, ByRef issue As String) As Boolean
+    Dim manager As Object
+    Dim exists As Boolean, actualName As String
+    Dim rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean
+
+    Set manager = Nothing
+    On Error Resume Next
+    Set manager = document.Extension.CustomPropertyManager("")
+    If Err.Number <> 0 Or manager Is Nothing Then
+        issue = "Cannot access file-level custom properties: " & CStr(document.GetPathName)
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    If Not TryReadProperty(manager, PartNameProperty(), exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then Exit Function
+    PartNameNeedsRepair = (Not exists Or _
+        (Len(Trim$(rawValue)) = 0 And Len(Trim$(resolvedValue)) = 0))
+End Function
+
+Function TryReadProperty(ByVal manager As Object, ByVal desiredName As String, _
+    ByRef exists As Boolean, ByRef actualName As String, ByRef rawValue As String, _
+    ByRef resolvedValue As String, ByRef wasResolved As Boolean, ByRef issue As String) As Boolean
+    Dim names As Variant, name As Variant
+    Dim linked As Boolean, status As Long
+
+    exists = False
+    actualName = ""
+    rawValue = ""
+    resolvedValue = ""
+    wasResolved = False
+    issue = ""
+
+    On Error GoTo Failed
+    names = manager.GetNames
+    If Not IsEmpty(names) And Not IsNull(names) Then
+        If IsArray(names) Then
+            For Each name In names
+                If StrComp(CStr(name), desiredName, vbTextCompare) = 0 Then
+                    exists = True
+                    actualName = CStr(name)
+                    Exit For
+                End If
+            Next name
+        End If
+    End If
+    If Not exists Then
+        TryReadProperty = True
+        Exit Function
+    End If
+
+    status = CLng(manager.Get6(actualName, False, rawValue, resolvedValue, wasResolved, linked))
+    TryReadProperty = True
+    Exit Function
+
+Failed:
+    issue = "Failed to read file-level property [" & desiredName & "]: " & Err.Description
+    TryReadProperty = False
+End Function
+
+Function ValidateTargets(ByVal targets As Object) As String
+    Dim key As Variant, document As Object
+    Dim path As String, problems As String
+    Dim attributes As Long
+
+    For Each key In targets.Keys
+        Set document = targets.Item(key)
+        path = CStr(key)
+        If Len(path) = 0 Or Dir$(path) = "" Then
+            AppendLine problems, "Missing or unsaved: " & path
+        Else
+            On Error Resume Next
+            Err.Clear
+            attributes = GetAttr(path)
+            If Err.Number <> 0 Then
+                AppendLine problems, "Cannot inspect file attributes: " & path & "; " & Err.Description
+                Err.Clear
+            ElseIf (attributes And vbReadOnly) <> 0 Then
+                AppendLine problems, "Read-only: " & path
+            End If
+            If CBool(document.GetSaveFlag) Then
+                AppendLine problems, "Unsaved changes already exist: " & path
+            End If
+            If Err.Number <> 0 Then
+                AppendLine problems, "Cannot inspect save state: " & path & "; " & Err.Description
+                Err.Clear
+            End If
+            On Error GoTo 0
+        End If
+    Next key
+    ValidateTargets = problems
+End Function
+
+Function CreateBackupFolder() As String
+    Dim fso As Object
+    Dim basePath As String, path As String
+    Dim suffix As Long
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    basePath = Environ$("USERPROFILE") & "\Desktop\SolidWorksAssetPartNameBackup_" & _
+        Format$(Now, "yyyymmdd_hhnnss")
+    path = basePath
+    suffix = 1
+    Do While fso.FolderExists(path)
+        path = basePath & "_" & CStr(suffix)
+        suffix = suffix + 1
+    Loop
+    fso.CreateFolder path
+    CreateBackupFolder = path
+End Function
+
+Function BackupTargets(ByVal targets As Object, ByVal backupRoot As String, _
+    ByRef issue As String) As Boolean
+    Dim fso As Object
+    Dim key As Variant
+    Dim sourcePath As String, destination As String
+    Dim manifest As String
+    Dim index As Long
+
+    On Error GoTo Failed
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    manifest = "Index,OriginalPath,BackupPath" & vbCrLf
+    For Each key In targets.Keys
+        index = index + 1
+        sourcePath = CStr(key)
+        destination = backupRoot & "\" & Format$(index, "0000") & "_" & fso.GetFileName(sourcePath)
+        fso.CopyFile sourcePath, destination, False
+        If Not fso.FileExists(destination) Then
+            Err.Raise vbObjectError + 301, , "Backup copy was not created: " & sourcePath
+        End If
+        manifest = manifest & CStr(index) & "," & CsvValue(sourcePath) & "," & _
+            CsvValue(destination) & vbCrLf
+    Next key
+    WriteUtf8 backupRoot & "\manifest.csv", manifest
+    BackupTargets = True
+    Exit Function
+
+Failed:
+    issue = "Source: " & sourcePath & vbCrLf & "Error: " & Err.Description
+    BackupTargets = False
+End Function
+
+Function CsvValue(ByVal value As String) As String
+    CsvValue = """" & Replace(value, """", """""") & """"
+End Function
+
+Function RepairPartName(ByVal document As Object, ByRef issue As String) As Boolean
+    Dim manager As Object
+    Dim exists As Boolean, actualName As String
+    Dim rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean
+    Dim status As Long, errors As Long, warnings As Long
+    Dim saved As Boolean
+    Dim path As String
+
+    On Error GoTo Failed
+    path = CStr(document.GetPathName)
+    Set manager = document.Extension.CustomPropertyManager("")
+    If manager Is Nothing Then Err.Raise vbObjectError + 401, , "File-level property manager is unavailable."
+
+    If Not TryReadProperty(manager, PartNameProperty(), exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then GoTo FailedWithIssue
+
+    If exists Then
+        status = CLng(manager.Set2(actualName, PartNameExpression()))
+        If status <> 0 Then
+            Err.Raise vbObjectError + 402, , "Set2 failed; status=" & CStr(status)
+        End If
+    Else
+        status = CLng(manager.Add3(PartNameProperty(), SW_CUSTOM_INFO_TEXT, _
+            PartNameExpression(), SW_CUSTOM_PROPERTY_ONLY_IF_NEW))
+        If status <> 0 Then
+            Err.Raise vbObjectError + 403, , "Add3 failed; status=" & CStr(status)
+        End If
+    End If
+
+    errors = 0
+    warnings = 0
+    saved = CBool(document.Save3(SW_SAVE_SILENT, errors, warnings))
+    If Not saved Or errors <> 0 Then
+        Err.Raise vbObjectError + 404, , "Save3 failed; errors=" & CStr(errors) & _
+            "; warnings=" & CStr(warnings)
+    End If
+
+    If Not TryReadProperty(manager, PartNameProperty(), exists, actualName, rawValue, _
+        resolvedValue, wasResolved, issue) Then GoTo FailedWithIssue
+    If Not exists Or (Len(Trim$(rawValue)) = 0 And Len(Trim$(resolvedValue)) = 0) Then
+        Err.Raise vbObjectError + 405, , "Property verification remained blank after save."
+    End If
+
+    RepairPartName = True
+    Exit Function
+
+Failed:
+    issue = "Repair failed for " & path & ": " & Err.Description
+FailedWithIssue:
+    If Len(issue) = 0 Then issue = "Repair failed for " & path & "."
+    RepairPartName = False
+End Function
+
+Function BuildReport(ByVal root As Object, ByVal targetCount As Long, _
+    ByVal successCount As Long, ByVal failureCount As Long, ByVal targetList As String, _
+    ByVal successList As String, ByVal failureList As String, ByVal backupRoot As String) As String
+    BuildReport = "SOLIDWORKS Asset file-level Part Name repair" & vbCrLf & _
+        "Completed: " & Format$(Now, "yyyy-mm-dd hh:nn:ss") & vbCrLf & _
+        "Top-level model: " & CStr(root.GetPathName) & vbCrLf & _
+        "Property: " & PartNameProperty() & vbCrLf & _
+        "Applied value: " & PartNameExpression() & vbCrLf & _
+        "asset_version changed: no" & vbCrLf & _
+        "Configuration-specific properties accessed: no" & vbCrLf & _
+        "Backup folder: " & backupRoot & vbCrLf & vbCrLf & _
+        "Targets: " & CStr(targetCount) & vbCrLf & targetList & vbCrLf & vbCrLf & _
+        "Succeeded: " & CStr(successCount) & vbCrLf & successList & vbCrLf & vbCrLf & _
+        "Failed: " & CStr(failureCount) & vbCrLf & failureList & vbCrLf
+End Function
+
+Sub RestoreRootAndCloseOpened(ByVal root As Object, ByVal openedDocs As Object)
+    Dim key As Variant, document As Object
+    Dim activateErrors As Long
+
+    On Error Resume Next
+    If Not root Is Nothing Then
+        swApp.ActivateDoc3 CStr(root.GetTitle), False, 1, activateErrors
+    End If
+    If Not openedDocs Is Nothing Then
+        For Each key In openedDocs.Keys
+            Set document = openedDocs.Item(key)
+            If Not document Is Nothing Then swApp.CloseDoc CStr(document.GetTitle)
+        Next key
+    End If
+    On Error GoTo 0
+End Sub
+
+Sub WriteUtf8(ByVal path As String, ByVal content As String)
+    Dim stream As Object
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2
+    stream.Charset = "utf-8"
+    stream.Open
+    stream.WriteText content
+    stream.SaveToFile path, 2
+    stream.Close
+End Sub

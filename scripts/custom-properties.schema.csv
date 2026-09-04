@@ -1,5 +1,6 @@
 DocumentType,Name,DefaultValue
 All,is_asset,
+All,零件名,
 All,class,
 All,is_tool,0
 All,is_fixture,0
