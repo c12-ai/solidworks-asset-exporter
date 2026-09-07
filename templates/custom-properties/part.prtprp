@@ -32,7 +32,10 @@
             <ChildControl PropName="asset_version" Visibility="IsChecked=true" />
             <ChildControl PropName="is_tool" Visibility="IsChecked=true" />
             <ChildControl PropName="is_fixture" Visibility="IsChecked=true" />
-            <ChildControl PropName="is_placement_required" Visibility="IsChecked=true" />
+            <ChildControl PropName="is_quick_changer" Visibility="IsChecked=true" />
+            <ChildControl PropName="is_quick_changer_rack" Visibility="IsChecked=true" />
+            <ChildControl PropName="connection_interface" Visibility="IsChecked=true" />
+            <ChildControl PropName="accepts_interfaces" Visibility="IsChecked=true" />
             <ChildControl PropName="is_adjustable" Visibility="IsChecked=true" />
             <ChildControl PropName="class" Visibility="IsChecked=true" />
             <ChildControl PropName="组框25" Visibility="IsChecked=true" />
@@ -72,26 +75,30 @@
         </Data>
       </Control>
       <Control Label="is_tool" PropName="is_tool" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0">
-        <ChildControl PropName="accepts_robots" Visibility="IsChecked=true" />
         <ChildControl PropName="is_asset" Visibility="IsChecked=true" />
       </Control>
-      <Control Label="accepts_robots" PropName="accepts_robots" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
       <Control Label="is_fixture" PropName="is_fixture" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0">
-        <ChildControl PropName="accepts_interface" Visibility="IsChecked=true" />
         <ChildControl PropName="slots_num" Visibility="IsChecked=true" />
       </Control>
-      <Control Label="accepts_interface" PropName="accepts_interface" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
       <Control Label="slots_num" PropName="slots_num" ApplyTo="Global" Type="NumericCtrl" ReadOnly="False" DefaultValue="0" />
-      <Control Label="is_placement_required" PropName="is_placement_required" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0">
-        <ChildControl PropName="placement_interface" Visibility="IsChecked=true" />
+      <Control Label="is_quick_changer" PropName="is_quick_changer" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0">
+        <ChildControl PropName="quick_changer_side" Visibility="IsChecked=true" />
       </Control>
-      <Control Label="placement_interface" PropName="placement_interface" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
+      <Control Label="quick_changer_side" PropName="quick_changer_side" ApplyTo="Global" Type="ComboBox" ReadOnly="False" UserDefineable="False">
+        <Data Path="" SourceType="List">
+          <Item>robot_side</Item>
+          <Item>tool_side</Item>
+        </Data>
+      </Control>
+      <Control Label="is_quick_changer_rack" PropName="is_quick_changer_rack" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0" />
+      <Control Label="connection_interface" PropName="connection_interface" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
+      <Control Label="accepts_interfaces" PropName="accepts_interfaces" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
       <Control Label="has_QRcode" PropName="has_QRcode" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0">
         <ChildControl PropName="QR_size" Visibility="IsChecked=true" />
         <ChildControl PropName="QR_spacing" Visibility="IsChecked=true" />
-        <ChildControl PropName="号数30" Visibility="IsChecked=true" />
+        <ChildControl PropName="QR_num" Visibility="IsChecked=true" />
       </Control>
-      <Control Label="QR_num" PropName="号数30" ApplyTo="Global" Type="NumericCtrl" ReadOnly="False" DefaultValue="0" />
+      <Control Label="QR_num" PropName="QR_num" ApplyTo="Global" Type="NumericCtrl" ReadOnly="False" DefaultValue="0" />
       <Control Label="QR_size" PropName="QR_size" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
       <Control Label="QR_spacing" PropName="QR_spacing" ApplyTo="Global" Type="NumericCtrl" ReadOnly="False" DefaultValue="0" />
       <Control Label="is_adjustable" PropName="is_adjustable" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0" />

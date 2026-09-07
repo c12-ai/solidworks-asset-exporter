@@ -336,15 +336,21 @@ namespace SolidWorksAssetExporter.AddIn
                 }
 
                 var propertyKey = node.SourcePath ?? node.Name;
-                if (!isRobot && inspectedAssetProperties.Add(propertyKey))
+                if (inspectedAssetProperties.Add(propertyKey))
                 {
                     try
                     {
                         var businessProperties = PropertyRules.Merge(node.Model);
-                        foreach (var name in PropertyRules.MissingOrBlankProperties(
-                            businessProperties, RequiredAssetProperties))
+                        if (!isRobot)
+                        {
+                            foreach (var name in PropertyRules.MissingOrBlankProperties(
+                                businessProperties, RequiredAssetProperties))
+                                AddIssue(requiredPropertyIssues, "Asset [" + node.Name + "]（" +
+                                    node.SourcePath + "）的文件级自定义属性 [" + name + "] 缺失或为空白。");
+                        }
+                        foreach (var issue in PropertyRules.ValidateAssetConnectionProperties(businessProperties))
                             AddIssue(requiredPropertyIssues, "Asset [" + node.Name + "]（" +
-                                node.SourcePath + "）的文件级自定义属性 [" + name + "] 缺失或为空白。");
+                                node.SourcePath + "）" + issue);
                     }
                     catch (Exception ex)
                     {

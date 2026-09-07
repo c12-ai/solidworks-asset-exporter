@@ -84,6 +84,12 @@ foreach ($name in $payloadFiles) {
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.cmd') -Destination (Join-Path $packageRoot 'Install.cmd')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination (Join-Path $packageRoot 'Uninstall.cmd')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'set-interactive-user-startup.ps1') -Destination $packageRoot
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-custom-property-templates.ps1') `
+    -Destination (Join-Path $packageRoot 'Install-CustomPropertyTemplates.ps1')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\custom-properties') `
+    -Destination (Join-Path $packageRoot 'custom-properties') -Recurse
+Copy-Item -LiteralPath (Join-Path $repoRoot 'macros') `
+    -Destination (Join-Path $packageRoot 'macros') -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination (Join-Path $packageRoot 'README.md')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\RELEASING.md') -Destination (Join-Path $packageRoot 'RELEASING.md')
 

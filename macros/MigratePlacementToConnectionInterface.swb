@@ -1,0 +1,478 @@
+Option Explicit
+
+' One-time SOLIDWORKS VBA text macro.
+' Copies file-level placement_interface to connection_interface for Asset roots
+' marked is_placement_required=1. It never reads configuration properties,
+' deletes legacy properties, or changes version properties.
+
+Dim swApp As Object
+
+Const SW_DOC_PART As Long = 1
+Const SW_DOC_ASSEMBLY As Long = 2
+Const SW_OPEN_SILENT As Long = 1
+Const SW_SAVE_SILENT As Long = 1
+Const SW_CUSTOM_INFO_TEXT As Long = 30
+Const SW_CUSTOM_PROPERTY_ONLY_IF_NEW As Long = 0
+
+Sub main()
+    Dim root As Object, rootComponent As Object
+    Dim assets As Object, targets As Object, targetValues As Object
+    Dim visited As Object, openedDocs As Object
+    Dim key As Variant, document As Object
+    Dim scanIssues As String, conflicts As String, issue As String
+    Dim oldValue As String, newValue As String
+    Dim backupRoot As String, reportPath As String
+    Dim successList As String, failureList As String
+    Dim successCount As Long, failureCount As Long
+    Dim answer As VbMsgBoxResult, fatalMessage As String
+
+    On Error GoTo FatalError
+    Set swApp = Application.SldWorks
+    Set root = swApp.ActiveDoc
+    If root Is Nothing Then
+        MsgBox "Open the top-level SOLIDWORKS assembly first.", vbExclamation, _
+            "Migrate Placement Interface"
+        Exit Sub
+    End If
+    If CLng(root.GetType) <> SW_DOC_ASSEMBLY Then
+        MsgBox "The active document must be a SOLIDWORKS assembly.", vbExclamation, _
+            "Migrate Placement Interface"
+        Exit Sub
+    End If
+
+    Set assets = CreateDictionary()
+    Set targets = CreateDictionary()
+    Set targetValues = CreateDictionary()
+    Set visited = CreateDictionary()
+    Set openedDocs = CreateDictionary()
+
+    On Error Resume Next
+    root.ResolveAllLightWeightComponents False
+    Err.Clear
+    On Error GoTo FatalError
+
+    issue = ""
+    If IsTrueProperty(root, "is_asset", issue) Then
+        AddDocumentByPath assets, root, scanIssues
+    Else
+        If Len(issue) > 0 Then AppendLine scanIssues, issue
+        Set rootComponent = Nothing
+        On Error Resume Next
+        Set rootComponent = root.ConfigurationManager.ActiveConfiguration.GetRootComponent3(True)
+        If Err.Number <> 0 Then
+            AppendLine scanIssues, "Cannot obtain root component: " & Err.Description
+            Err.Clear
+        End If
+        On Error GoTo FatalError
+        If Not rootComponent Is Nothing Then _
+            CollectChildren rootComponent, assets, visited, openedDocs, scanIssues
+    End If
+
+    For Each key In assets.Keys
+        Set document = assets.Item(key)
+        issue = ""
+        If IsTrueProperty(document, "is_placement_required", issue) Then
+            If Not ReadEffectiveProperty(document, "placement_interface", oldValue, issue) Then
+                AppendLine scanIssues, CStr(key) & ": " & issue
+            ElseIf Len(Trim$(oldValue)) > 0 Then
+                issue = ""
+                If Not ReadEffectiveProperty(document, "connection_interface", newValue, issue) Then
+                    AppendLine scanIssues, CStr(key) & ": " & issue
+                ElseIf Len(Trim$(newValue)) = 0 Then
+                    targets.Add CStr(key), document
+                    targetValues.Add CStr(key), Trim$(oldValue)
+                ElseIf StrComp(Trim$(newValue), Trim$(oldValue), vbTextCompare) <> 0 Then
+                    AppendLine conflicts, CStr(key) & vbCrLf & _
+                        "  placement_interface=" & oldValue & vbCrLf & _
+                        "  connection_interface=" & newValue
+                End If
+            End If
+        ElseIf Len(issue) > 0 Then
+            AppendLine scanIssues, CStr(key) & ": " & issue
+        End If
+    Next key
+
+    If Len(scanIssues) > 0 Or Len(conflicts) > 0 Then
+        reportPath = Environ$("TEMP") & "\SolidWorksPlacementInterfaceMigration-preflight.txt"
+        WriteUtf8 reportPath, "No model was changed." & vbCrLf & vbCrLf & _
+            "Scan errors:" & vbCrLf & scanIssues & vbCrLf & vbCrLf & _
+            "Existing-value conflicts (not overwritten):" & vbCrLf & conflicts
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Migration preflight found errors or conflicting new values." & vbCrLf & _
+            "No model was changed." & vbCrLf & "Details: " & reportPath, _
+            vbCritical, "Migrate Placement Interface"
+        Exit Sub
+    End If
+
+    If targets.Count = 0 Then
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "No migration is required." & vbCrLf & _
+            "Every matching Asset either has no legacy placement_interface value or already has the same connection_interface value.", _
+            vbInformation, "Migrate Placement Interface"
+        Exit Sub
+    End If
+
+    issue = ValidateTargets(targets)
+    If Len(issue) > 0 Then
+        reportPath = Environ$("TEMP") & "\SolidWorksPlacementInterfaceMigration-preflight.txt"
+        WriteUtf8 reportPath, "No model was changed." & vbCrLf & vbCrLf & issue
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Target validation failed. No model was changed." & vbCrLf & _
+            "Details: " & reportPath, vbCritical, "Migrate Placement Interface"
+        Exit Sub
+    End If
+
+    answer = MsgBox("Detected " & CStr(targets.Count) & " Asset file(s) to migrate." & vbCrLf & vbCrLf & _
+        "The macro will:" & vbCrLf & _
+        "1. Back up every target SLDASM/SLDPRT." & vbCrLf & _
+        "2. Copy placement_interface to file-level connection_interface." & vbCrLf & _
+        "3. Save and verify every changed Asset." & vbCrLf & vbCrLf & _
+        "The legacy properties and all version/configuration properties remain unchanged." & vbCrLf & vbCrLf & _
+        "Continue?", vbYesNo + vbExclamation + vbDefaultButton2, _
+        "Migrate Placement Interface")
+    If answer <> vbYes Then
+        RestoreRootAndCloseOpened root, openedDocs
+        Exit Sub
+    End If
+
+    backupRoot = CreateBackupFolder()
+    issue = ""
+    If Not BackupTargets(targets, targetValues, backupRoot, issue) Then
+        RestoreRootAndCloseOpened root, openedDocs
+        MsgBox "Backup failed. No model was changed." & vbCrLf & issue, _
+            vbCritical, "Migrate Placement Interface"
+        Exit Sub
+    End If
+
+    For Each key In targets.Keys
+        Set document = targets.Item(key)
+        issue = ""
+        If WriteNewProperty(document, CStr(targetValues.Item(key)), issue) Then
+            successCount = successCount + 1
+            AppendLine successList, CStr(key) & " = " & CStr(targetValues.Item(key))
+        Else
+            failureCount = failureCount + 1
+            AppendLine failureList, CStr(key) & vbCrLf & "  " & issue
+        End If
+    Next key
+
+    reportPath = backupRoot & "\migration-report.txt"
+    WriteUtf8 reportPath, "Placement to connection interface migration" & vbCrLf & _
+        "Completed: " & Format$(Now, "yyyy-mm-dd hh:nn:ss") & vbCrLf & _
+        "Top-level model: " & CStr(root.GetPathName) & vbCrLf & _
+        "Legacy properties deleted: no" & vbCrLf & _
+        "Version properties changed: no" & vbCrLf & _
+        "Configuration properties accessed: no" & vbCrLf & _
+        "Backup folder: " & backupRoot & vbCrLf & vbCrLf & _
+        "Succeeded: " & CStr(successCount) & vbCrLf & successList & vbCrLf & vbCrLf & _
+        "Failed: " & CStr(failureCount) & vbCrLf & failureList
+    RestoreRootAndCloseOpened root, openedDocs
+
+    If failureCount = 0 Then
+        MsgBox "Migration completed successfully." & vbCrLf & _
+            "Assets changed and saved: " & CStr(successCount) & vbCrLf & _
+            "Backup and report: " & backupRoot, vbInformation, _
+            "Migrate Placement Interface"
+    Else
+        MsgBox "Migration completed with failures." & vbCrLf & _
+            "Succeeded: " & CStr(successCount) & vbCrLf & _
+            "Failed: " & CStr(failureCount) & vbCrLf & _
+            "Report: " & reportPath, vbCritical, "Migrate Placement Interface"
+    End If
+    Exit Sub
+
+FatalError:
+    fatalMessage = Err.Description
+    On Error Resume Next
+    If Not root Is Nothing And Not openedDocs Is Nothing Then _
+        RestoreRootAndCloseOpened root, openedDocs
+    MsgBox "Migration stopped: " & fatalMessage, vbCritical, _
+        "Migrate Placement Interface"
+End Sub
+
+Function CreateDictionary() As Object
+    Dim value As Object
+    Set value = CreateObject("Scripting.Dictionary")
+    value.CompareMode = 1
+    Set CreateDictionary = value
+End Function
+
+Sub AppendLine(ByRef target As String, ByVal value As String)
+    If Len(target) > 0 Then target = target & vbCrLf
+    target = target & value
+End Sub
+
+Sub AddDocumentByPath(ByRef documents As Object, ByVal document As Object, _
+    ByRef issues As String)
+    Dim path As String
+    path = Trim$(CStr(document.GetPathName))
+    If Len(path) = 0 Then
+        AppendLine issues, "Asset is virtual or unsaved: " & CStr(document.GetTitle)
+    ElseIf Dir$(path) = "" Then
+        AppendLine issues, "Asset source does not exist: " & path
+    ElseIf Not documents.Exists(path) Then
+        documents.Add path, document
+    End If
+End Sub
+
+Sub CollectChildren(ByVal parent As Object, ByRef assets As Object, _
+    ByRef visited As Object, ByRef openedDocs As Object, ByRef issues As String)
+    Dim children As Variant, child As Variant
+    On Error Resume Next
+    children = parent.GetChildren
+    If Err.Number <> 0 Then
+        AppendLine issues, "Cannot enumerate children of " & CStr(parent.Name2) & ": " & Err.Description
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+    If IsEmpty(children) Or IsNull(children) Or Not IsArray(children) Then Exit Sub
+    For Each child In children
+        If Not child Is Nothing Then CollectComponent child, assets, visited, openedDocs, issues
+    Next child
+End Sub
+
+Sub CollectComponent(ByVal component As Object, ByRef assets As Object, _
+    ByRef visited As Object, ByRef openedDocs As Object, ByRef issues As String)
+    Dim suppression As Long, document As Object
+    Dim issue As String, path As String, configuration As String, branchKey As String
+
+    suppression = -1
+    On Error Resume Next
+    suppression = CLng(component.GetSuppression2)
+    Err.Clear
+    On Error GoTo 0
+    If suppression = 0 Then Exit Sub
+
+    Set document = AcquireComponentDocument(component, openedDocs, issue)
+    If document Is Nothing Then
+        AppendLine issues, issue
+        Exit Sub
+    End If
+    issue = ""
+    If IsTrueProperty(document, "is_asset", issue) Then
+        AddDocumentByPath assets, document, issues
+        Exit Sub
+    End If
+    If Len(issue) > 0 Then
+        AppendLine issues, issue
+        Exit Sub
+    End If
+    If CLng(document.GetType) <> SW_DOC_ASSEMBLY Then Exit Sub
+
+    path = LCase$(Trim$(CStr(document.GetPathName)))
+    On Error Resume Next
+    configuration = LCase$(Trim$(CStr(component.ReferencedConfiguration)))
+    Err.Clear
+    On Error GoTo 0
+    branchKey = path & "|" & configuration
+    If visited.Exists(branchKey) Then Exit Sub
+    visited.Add branchKey, True
+    CollectChildren component, assets, visited, openedDocs, issues
+End Sub
+
+Function AcquireComponentDocument(ByVal component As Object, ByRef openedDocs As Object, _
+    ByRef issue As String) As Object
+    Dim document As Object, path As String
+    Dim documentType As Long, errors As Long, warnings As Long
+
+    On Error Resume Next
+    Set document = component.GetModelDoc2
+    Err.Clear
+    On Error GoTo 0
+    If Not document Is Nothing Then
+        Set AcquireComponentDocument = document
+        Exit Function
+    End If
+
+    path = Trim$(CStr(component.GetPathName))
+    If Len(path) = 0 Or Dir$(path) = "" Then
+        issue = "Unresolved, virtual, unsaved, or missing component: " & CStr(component.Name2)
+        Exit Function
+    End If
+    documentType = DocumentTypeFromPath(path)
+    If documentType = 0 Then
+        issue = "Unsupported component type: " & path
+        Exit Function
+    End If
+    Set document = swApp.OpenDoc6(path, documentType, SW_OPEN_SILENT, "", errors, warnings)
+    If document Is Nothing Or errors <> 0 Then
+        issue = "Cannot open component: " & path & "; errors=" & CStr(errors) & _
+            "; warnings=" & CStr(warnings)
+        Exit Function
+    End If
+    If Not openedDocs.Exists(path) Then openedDocs.Add path, document
+    Set AcquireComponentDocument = document
+End Function
+
+Function DocumentTypeFromPath(ByVal path As String) As Long
+    Dim extension As String
+    extension = LCase$(Mid$(path, InStrRev(path, ".")))
+    If extension = ".sldprt" Then DocumentTypeFromPath = SW_DOC_PART
+    If extension = ".sldasm" Then DocumentTypeFromPath = SW_DOC_ASSEMBLY
+End Function
+
+Function IsTrueProperty(ByVal document As Object, ByVal propertyName As String, _
+    ByRef issue As String) As Boolean
+    Dim value As String
+    If Not ReadEffectiveProperty(document, propertyName, value, issue) Then Exit Function
+    value = LCase$(Trim$(value))
+    IsTrueProperty = (value = "1" Or value = "true" Or value = "yes")
+End Function
+
+Function ReadEffectiveProperty(ByVal document As Object, ByVal propertyName As String, _
+    ByRef value As String, ByRef issue As String) As Boolean
+    Dim manager As Object, names As Variant, name As Variant
+    Dim actualName As String, rawValue As String, resolvedValue As String
+    Dim wasResolved As Boolean, linked As Boolean, status As Long
+
+    value = ""
+    On Error GoTo Failed
+    Set manager = document.Extension.CustomPropertyManager("")
+    If manager Is Nothing Then Err.Raise vbObjectError + 501, , "Property manager is unavailable."
+    names = manager.GetNames
+    If Not IsEmpty(names) And Not IsNull(names) And IsArray(names) Then
+        For Each name In names
+            If StrComp(CStr(name), propertyName, vbTextCompare) = 0 Then
+                actualName = CStr(name)
+                Exit For
+            End If
+        Next name
+    End If
+    If Len(actualName) = 0 Then
+        ReadEffectiveProperty = True
+        Exit Function
+    End If
+    status = CLng(manager.Get6(actualName, False, rawValue, resolvedValue, wasResolved, linked))
+    If wasResolved And Len(Trim$(resolvedValue)) > 0 Then
+        value = resolvedValue
+    Else
+        value = rawValue
+    End If
+    ReadEffectiveProperty = True
+    Exit Function
+Failed:
+    issue = "Failed to read file-level [" & propertyName & "]: " & Err.Description
+End Function
+
+Function ValidateTargets(ByVal targets As Object) As String
+    Dim key As Variant, document As Object, path As String
+    Dim problems As String, attributes As Long
+    For Each key In targets.Keys
+        Set document = targets.Item(key)
+        path = CStr(key)
+        If Len(path) = 0 Or Dir$(path) = "" Then
+            AppendLine problems, "Missing or unsaved: " & path
+        Else
+            On Error Resume Next
+            Err.Clear
+            attributes = GetAttr(path)
+            If Err.Number <> 0 Then
+                AppendLine problems, "Cannot inspect attributes: " & path & "; " & Err.Description
+                Err.Clear
+            ElseIf (attributes And vbReadOnly) <> 0 Then
+                AppendLine problems, "Read-only: " & path
+            End If
+            If CBool(document.GetSaveFlag) Then AppendLine problems, "Already has unsaved changes: " & path
+            If Err.Number <> 0 Then
+                AppendLine problems, "Cannot inspect save state: " & path & "; " & Err.Description
+                Err.Clear
+            End If
+            On Error GoTo 0
+        End If
+    Next key
+    ValidateTargets = problems
+End Function
+
+Function CreateBackupFolder() As String
+    Dim fso As Object, basePath As String, path As String, suffix As Long
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    basePath = Environ$("USERPROFILE") & "\Desktop\SolidWorksPlacementInterfaceBackup_" & _
+        Format$(Now, "yyyymmdd_hhnnss")
+    path = basePath
+    suffix = 1
+    Do While fso.FolderExists(path)
+        path = basePath & "_" & CStr(suffix)
+        suffix = suffix + 1
+    Loop
+    fso.CreateFolder path
+    CreateBackupFolder = path
+End Function
+
+Function BackupTargets(ByVal targets As Object, ByVal values As Object, _
+    ByVal backupRoot As String, ByRef issue As String) As Boolean
+    Dim fso As Object, key As Variant, destination As String, manifest As String
+    Dim index As Long
+    On Error GoTo Failed
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    manifest = "Index,OriginalPath,BackupPath,NewValue" & vbCrLf
+    For Each key In targets.Keys
+        index = index + 1
+        destination = backupRoot & "\" & Format$(index, "0000") & "_" & fso.GetFileName(CStr(key))
+        fso.CopyFile CStr(key), destination, False
+        manifest = manifest & CStr(index) & "," & CsvValue(CStr(key)) & "," & _
+            CsvValue(destination) & "," & CsvValue(CStr(values.Item(key))) & vbCrLf
+    Next key
+    WriteUtf8 backupRoot & "\manifest.csv", manifest
+    BackupTargets = True
+    Exit Function
+Failed:
+    issue = "Backup failed for " & CStr(key) & ": " & Err.Description
+End Function
+
+Function WriteNewProperty(ByVal document As Object, ByVal value As String, _
+    ByRef issue As String) As Boolean
+    Dim manager As Object, current As String
+    Dim status As Long, errors As Long, warnings As Long, saved As Boolean
+    On Error GoTo Failed
+    Set manager = document.Extension.CustomPropertyManager("")
+    If manager Is Nothing Then Err.Raise vbObjectError + 601, , "Property manager is unavailable."
+    status = CLng(manager.Add3("connection_interface", SW_CUSTOM_INFO_TEXT, value, _
+        SW_CUSTOM_PROPERTY_ONLY_IF_NEW))
+    If status <> 0 Then
+        status = CLng(manager.Set2("connection_interface", value))
+        If status <> 0 Then Err.Raise vbObjectError + 602, , "Cannot write property; status=" & CStr(status)
+    End If
+    saved = CBool(document.Save3(SW_SAVE_SILENT, errors, warnings))
+    If Not saved Or errors <> 0 Then
+        Err.Raise vbObjectError + 603, , "Save3 failed; errors=" & CStr(errors) & _
+            "; warnings=" & CStr(warnings)
+    End If
+    issue = ""
+    If Not ReadEffectiveProperty(document, "connection_interface", current, issue) Then GoTo FailedWithIssue
+    If StrComp(Trim$(current), Trim$(value), vbTextCompare) <> 0 Then
+        Err.Raise vbObjectError + 604, , "Verification mismatch after save."
+    End If
+    WriteNewProperty = True
+    Exit Function
+Failed:
+    issue = "Migration failed: " & Err.Description
+FailedWithIssue:
+End Function
+
+Function CsvValue(ByVal value As String) As String
+    CsvValue = """" & Replace(value, """", """""") & """"
+End Function
+
+Sub RestoreRootAndCloseOpened(ByVal root As Object, ByVal openedDocs As Object)
+    Dim key As Variant, document As Object, activationErrors As Long
+    On Error Resume Next
+    swApp.ActivateDoc3 CStr(root.GetTitle), False, 1, activationErrors
+    For Each key In openedDocs.Keys
+        Set document = openedDocs.Item(key)
+        If Not document Is Nothing Then swApp.CloseDoc CStr(document.GetTitle)
+    Next key
+    On Error GoTo 0
+End Sub
+
+Sub WriteUtf8(ByVal path As String, ByVal content As String)
+    Dim stream As Object
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2
+    stream.Charset = "utf-8"
+    stream.Open
+    stream.WriteText content
+    stream.SaveToFile path, 2
+    stream.Close
+End Sub

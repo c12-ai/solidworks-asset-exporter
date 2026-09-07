@@ -62,7 +62,7 @@ internal static class InspectAssetClasses
             }
 
             Console.WriteLine("ACTIVE_DOCUMENT=" + Clean(document.GetPathName()));
-            Console.WriteLine("COLUMNS=零件名\tclass\tasset_version\tis_tool\tis_fixture\tis_placement_required\tis_adjustable\taccepts_robots\taccepts_interface\tplacement_interface\tslots_num\t设计目的\t文件");
+            Console.WriteLine("COLUMNS=零件名\tclass\tasset_version\tis_tool\tis_fixture\tis_quick_changer\tquick_changer_side\tis_quick_changer_rack\tconnection_interface\taccepts_interfaces\tis_adjustable\tslots_num\t设计目的\t文件");
             Walk(SwAssemblyRoot.FromActiveDocument(application));
             Console.WriteLine("ASSET_INSTANCE_COUNT=" + _assetInstanceCount.ToString(CultureInfo.InvariantCulture));
             Console.WriteLine("UNIQUE_ASSET_COUNT=" + SeenAssets.Count.ToString(CultureInfo.InvariantCulture));
@@ -130,11 +130,12 @@ internal static class InspectAssetClasses
             Value(properties, "asset_version"),
             Value(properties, "is_tool"),
             Value(properties, "is_fixture"),
-            Value(properties, "is_placement_required"),
+            Value(properties, "is_quick_changer"),
+            Value(properties, "quick_changer_side"),
+            Value(properties, "is_quick_changer_rack"),
+            Value(properties, "connection_interface"),
+            Value(properties, "accepts_interfaces"),
             Value(properties, "is_adjustable"),
-            Value(properties, "accepts_robots"),
-            Value(properties, "accepts_interface"),
-            Value(properties, "placement_interface"),
             Value(properties, "slots_num"),
             Value(properties, "设计目的"),
             node.SourcePath ?? string.Empty

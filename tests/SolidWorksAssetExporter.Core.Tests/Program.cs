@@ -39,6 +39,8 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Configuration properties are ignored for metadata", ConfigurationPropertiesIgnoredForMetadata);
             Run("Required Asset properties report every blank field", RequiredAssetPropertiesReportEveryBlankField);
             Run("Wanxiang publishable classes use the 0.4.0 spelling", WanxiangPublishableClassContract);
+            Run("Quick changer connection properties are validated together", QuickChangerConnectionPropertiesAreValidatedTogether);
+            Run("Connection roles are derived from class and is flags", ConnectionRolesAreDerived);
             Run("UUIDv5 matches RFC vector", Uuid5KnownVector);
             Run("Asset identity uses creation time and file name only", AssetIdentityUsesCreationTimeAndFileName);
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
@@ -684,6 +686,42 @@ namespace SolidWorksAssetExporter.Core.Tests
             Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
             properties[PropertyRules.AssetClass] = "robot";
             Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+        }
+
+        private static void QuickChangerConnectionPropertiesAreValidatedTogether()
+        {
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { PropertyRules.AssetClass, "movable" },
+                { PropertyRules.IsQuickChanger, "1" },
+                { PropertyRules.QuickChangerSide, "tool_side" },
+                { PropertyRules.ConnectionInterface, "QUICK_CHANGE_PAIR" },
+                { PropertyRules.AcceptsInterfaces, "ISO_9409-1-50-4-M6" }
+            };
+            Equal(0, PropertyRules.ValidateAssetConnectionProperties(properties).Count);
+
+            properties[PropertyRules.QuickChangerSide] = "lower";
+            properties[PropertyRules.ConnectionInterface] = string.Empty;
+            properties[PropertyRules.AcceptsInterfaces] = string.Empty;
+            var issues = PropertyRules.ValidateAssetConnectionProperties(properties);
+            Equal(3, issues.Count);
+            True(issues.Any(value => value.Contains("quick_changer_side")));
+            True(issues.Any(value => value.Contains("connection_interface")));
+            True(issues.Any(value => value.Contains("accepts_interfaces")));
+        }
+
+        private static void ConnectionRolesAreDerived()
+        {
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { PropertyRules.AssetClass, "movable" },
+                { PropertyRules.IsQuickChanger, "1" },
+                { PropertyRules.QuickChangerSide, "robot_side" }
+            };
+            Equal("快换盘-机器人端", PropertyRules.DescribeAssetConnectionRole(properties));
+            properties[PropertyRules.IsQuickChanger] = "0";
+            properties[PropertyRules.IsQuickChangerRack] = "1";
+            Equal("快换架", PropertyRules.DescribeAssetConnectionRole(properties));
         }
 
         private static void Uuid5KnownVector()
