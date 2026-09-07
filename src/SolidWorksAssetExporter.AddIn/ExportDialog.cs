@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using SolidWorks.Interop.sldworks;
@@ -23,15 +25,19 @@ namespace SolidWorksAssetExporter.AddIn
         private readonly Button _analyze = new Button();
         private readonly Button _close = new Button();
         private readonly Button _cancel = new Button();
+        private readonly Button _viewUploadLog = new Button();
         private readonly Label _status = new Label();
         private readonly IList<Button> _browseButtons = new List<Button>();
         private readonly CheckBox _upload = new CheckBox();
         private readonly CheckBox _saveRegistryLocally = new CheckBox();
+        private readonly CheckBox _exportProject = new CheckBox();
         private readonly TextBox _serviceUrl = new TextBox();
         private readonly TextBox _apiKey = new TextBox();
+        private Button _projectBrowse;
         private AnalysisResult _analysis;
         private bool _busy;
         private bool _cancelRequested;
+        private string _lastUploadLogPath;
 
         public ExportDialog(SldWorks application)
         {
@@ -45,11 +51,12 @@ namespace SolidWorksAssetExporter.AddIn
 
         private void BuildUi()
         {
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 3, RowCount = 12 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 3, RowCount = 13 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -59,34 +66,37 @@ namespace SolidWorksAssetExporter.AddIn
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
             AddLabel(layout, "Asset 本地输出根目录", 0); AddPathRow(layout, _assetRoot, 0);
-            AddLabel(layout, "Project 本地输出根目录", 1); AddPathRow(layout, _projectRoot, 1);
-            AddLabel(layout, "XML Project mesh", 2);
+            AddLabel(layout, "Project 本地输出根目录", 1); _projectBrowse = AddPathRow(layout, _projectRoot, 1);
+            _exportProject.Text = "导出 Project（普通节点导出几何；Robot 仅写 robot_id 地址）";
+            _exportProject.AutoSize = true; _exportProject.Dock = DockStyle.Fill;
+            layout.Controls.Add(_exportProject, 1, 2); layout.SetColumnSpan(_exportProject, 2);
+            AddLabel(layout, "XML Project mesh", 3);
             var formats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
             _step.Text = "STEP"; _step.AutoSize = true; _stl.Text = "STL"; _stl.AutoSize = true; formats.Controls.Add(_step); formats.Controls.Add(_stl);
-            layout.Controls.Add(formats, 1, 2); layout.SetColumnSpan(formats, 2);
-            AddLabel(layout, "图纸查找方式", 3);
+            layout.Controls.Add(formats, 1, 3); layout.SetColumnSpan(formats, 2);
+            AddLabel(layout, "图纸查找方式", 4);
             var drawingLookup = new Label { Text = "文件系统查找同目录、同文件名（预览不打开工程图）", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-            layout.Controls.Add(drawingLookup, 1, 3); layout.SetColumnSpan(drawingLookup, 2);
+            layout.Controls.Add(drawingLookup, 1, 4); layout.SetColumnSpan(drawingLookup, 2);
 
             _upload.Text = "本地导出成功后直接上传 Wanxiang 数据服务"; _upload.AutoSize = true; _upload.Dock = DockStyle.Fill;
-            layout.Controls.Add(_upload, 1, 4); layout.SetColumnSpan(_upload, 2);
-            AddLabel(layout, "数据服务地址", 5); _serviceUrl.Dock = DockStyle.Fill;
-            layout.Controls.Add(_serviceUrl, 1, 5); layout.SetColumnSpan(_serviceUrl, 2);
-            AddLabel(layout, "API key", 6); _apiKey.Dock = DockStyle.Fill; _apiKey.UseSystemPasswordChar = true;
-            layout.Controls.Add(_apiKey, 1, 6); layout.SetColumnSpan(_apiKey, 2);
+            layout.Controls.Add(_upload, 1, 5); layout.SetColumnSpan(_upload, 2);
+            AddLabel(layout, "数据服务地址", 6); _serviceUrl.Dock = DockStyle.Fill;
+            layout.Controls.Add(_serviceUrl, 1, 6); layout.SetColumnSpan(_serviceUrl, 2);
+            AddLabel(layout, "API key", 7); _apiKey.Dock = DockStyle.Fill; _apiKey.UseSystemPasswordChar = true;
+            layout.Controls.Add(_apiKey, 1, 7); layout.SetColumnSpan(_apiKey, 2);
             _saveRegistryLocally.Text = "将 Wanxiang asset-registry.json 同步保存到本地（默认不保存）";
             _saveRegistryLocally.AutoSize = true; _saveRegistryLocally.Dock = DockStyle.Fill;
-            layout.Controls.Add(_saveRegistryLocally, 1, 7); layout.SetColumnSpan(_saveRegistryLocally, 2);
+            layout.Controls.Add(_saveRegistryLocally, 1, 8); layout.SetColumnSpan(_saveRegistryLocally, 2);
 
-            var hint = new Label { Text = "远端固定保存到 assets 和 projects；预览通过 GET /asset/registry 读取，上传后由服务端原子注册。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
-            layout.Controls.Add(hint, 0, 8); layout.SetColumnSpan(hint, 3);
+            var hint = new Label { Text = "远端固定保存到 assets 和 projects；Robot 不导出 Asset/几何，仅在 Project XML 中写 robot_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
+            layout.Controls.Add(hint, 0, 9); layout.SetColumnSpan(hint, 3);
             _preview.Multiline = true; _preview.ReadOnly = true; _preview.ScrollBars = ScrollBars.Both; _preview.WordWrap = false;
             _preview.Font = new Font(FontFamily.GenericMonospace, 9f); _preview.Dock = DockStyle.Fill;
-            layout.Controls.Add(_preview, 0, 9); layout.SetColumnSpan(_preview, 3);
+            layout.Controls.Add(_preview, 0, 10); layout.SetColumnSpan(_preview, 3);
 
             _status.Text = "请先执行分类预览。"; _status.Dock = DockStyle.Fill;
             _status.TextAlign = ContentAlignment.MiddleLeft; _status.ForeColor = Color.DimGray;
-            layout.Controls.Add(_status, 0, 10); layout.SetColumnSpan(_status, 3);
+            layout.Controls.Add(_status, 0, 11); layout.SetColumnSpan(_status, 3);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 8, 0, 0) };
             _close.Text = "关闭"; _close.AutoSize = true; _close.Click += delegate { Close(); };
@@ -94,8 +104,11 @@ namespace SolidWorksAssetExporter.AddIn
             _analyze.Text = "分类预览"; _analyze.AutoSize = true; _analyze.Click += AnalyzeClicked;
             _cancel.Text = "取消导出"; _cancel.AutoSize = true; _cancel.Visible = false;
             _cancel.Click += delegate { RequestCancellation(); };
-            buttons.Controls.Add(_close); buttons.Controls.Add(_export); buttons.Controls.Add(_analyze); buttons.Controls.Add(_cancel);
-            layout.Controls.Add(buttons, 0, 11); layout.SetColumnSpan(buttons, 3);
+            _viewUploadLog.Text = "查看上传日志"; _viewUploadLog.AutoSize = true;
+            _viewUploadLog.Click += delegate { OpenUploadLog(); };
+            buttons.Controls.Add(_close); buttons.Controls.Add(_export); buttons.Controls.Add(_analyze);
+            buttons.Controls.Add(_cancel); buttons.Controls.Add(_viewUploadLog);
+            layout.Controls.Add(buttons, 0, 12); layout.SetColumnSpan(buttons, 3);
             Controls.Add(layout);
 
             _assetRoot.TextChanged += InvalidateAnalysis; _projectRoot.TextChanged += InvalidateAnalysis;
@@ -103,6 +116,11 @@ namespace SolidWorksAssetExporter.AddIn
             _upload.CheckedChanged += InvalidateAnalysis; _serviceUrl.TextChanged += InvalidateAnalysis;
             _apiKey.TextChanged += InvalidateAnalysis;
             _saveRegistryLocally.CheckedChanged += InvalidateAnalysis;
+            _exportProject.CheckedChanged += delegate(object sender, EventArgs args)
+            {
+                UpdateProjectControls(_busy);
+                InvalidateAnalysis(sender, args);
+            };
         }
 
         private static void AddLabel(TableLayoutPanel layout, string text, int row)
@@ -110,7 +128,7 @@ namespace SolidWorksAssetExporter.AddIn
             layout.Controls.Add(new Label { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, row);
         }
 
-        private void AddPathRow(TableLayoutPanel layout, TextBox textBox, int row)
+        private Button AddPathRow(TableLayoutPanel layout, TextBox textBox, int row)
         {
             textBox.Dock = DockStyle.Fill; layout.Controls.Add(textBox, 1, row);
             var browse = new Button { Text = "浏览...", Dock = DockStyle.Fill };
@@ -121,6 +139,7 @@ namespace SolidWorksAssetExporter.AddIn
             };
             layout.Controls.Add(browse, 2, row);
             _browseButtons.Add(browse);
+            return browse;
         }
 
         private void LoadSettings()
@@ -129,10 +148,14 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 var settings = _store.Load(); _assetRoot.Text = settings.AssetLibraryRoot ?? string.Empty;
                 _projectRoot.Text = settings.ProjectExportRoot ?? string.Empty;
+                _exportProject.Checked = settings.ExportProject;
                 _step.Checked = settings.ProjectMeshFormat == ProjectMeshFormat.Step; _stl.Checked = !_step.Checked;
                 _upload.Checked = settings.UploadAfterExport; _serviceUrl.Text = settings.WanxiangBaseUrl;
                 _apiKey.Text = _apiKeyStore.Load();
                 _saveRegistryLocally.Checked = settings.SaveRegistryLocally;
+                _lastUploadLogPath = WanxiangUploadLog.FindLatest();
+                _viewUploadLog.Enabled = !string.IsNullOrWhiteSpace(_lastUploadLogPath);
+                UpdateProjectControls(false);
             }
             catch (Exception ex) { MessageBox.Show(this, "设置读取失败: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
@@ -145,7 +168,8 @@ namespace SolidWorksAssetExporter.AddIn
                 ProjectMeshFormat = _stl.Checked ? ProjectMeshFormat.Stl : ProjectMeshFormat.Step,
                 DrawingSearchDirectories = new string[0], UploadAfterExport = _upload.Checked,
                 WanxiangBaseUrl = _serviceUrl.Text.Trim(),
-                WanxiangApiKey = _apiKey.Text.Trim(), SaveRegistryLocally = _saveRegistryLocally.Checked
+                WanxiangApiKey = _apiKey.Text.Trim(), SaveRegistryLocally = _saveRegistryLocally.Checked,
+                ExportProject = _exportProject.Checked
             };
         }
 
@@ -160,31 +184,42 @@ namespace SolidWorksAssetExporter.AddIn
                 _status.Text = "读取 Wanxiang 远程注册表...";
                 _preview.Refresh();
                 var registry = await Task.Run(delegate { return _coordinator.FetchWanxiangRegistry(settings); });
-                _preview.Text = "正在读取 Asset 源文件、图纸和内容指纹并判断 asset_version...";
-                _status.Text = "分类装配树并建立导出快照...";
+                _preview.Text = settings.ExportProject
+                    ? "正在读取 Asset/Project 源文件和内容指纹，并在分类预览阶段判断 asset_version/assembly_version..."
+                    : "正在读取 Asset 源文件和内容指纹；本次不导出 Project...";
+                _status.Text = settings.ExportProject
+                    ? "分类装配树、检查 Asset/Project 版本并建立导出快照..."
+                    : "分类装配树、检查 Asset 版本并建立导出快照...";
                 _preview.Refresh();
                 _analysis = _coordinator.Analyze(settings, registry); _preview.Text = _analysis.Preview;
                 _store.Save(settings); _export.Enabled = _analysis.CanExport;
-                _status.Text = _analysis.CanExport ? "预览完成，可以导出。" : "预览完成，请先处理 Asset 红色提示。";
+                _status.Text = _analysis.CanExport ? "预览完成，可以导出。" : "预览完成，请先处理 Asset/Project 红色提示。";
                 _status.ForeColor = _analysis.CanExport ? Color.DarkGreen : Color.DarkRed;
                 var upgradeAssets = _coordinator.OpenAssetsRequiringVersionUpgrade(_analysis);
+                var notices = new List<string>();
                 if (_analysis.UnsupportedAssetRoots.Count != 0)
                 {
-                    MessageBox.Show(this,
-                        "检测到 " + _analysis.UnsupportedAssetRoots.Count + " 个 Asset 根仍是 SOLIDWORKS 虚拟/内嵌组件。\r\n" +
+                    notices.Add("检测到 " + _analysis.UnsupportedAssetRoots.Count + " 个 Asset 根仍是 SOLIDWORKS 虚拟/内嵌组件。\r\n" +
                         "它们存储在父装配体内部；Temp\\swx...\\VC~~/IC~~ 只是会话临时路径，不能作为独立 Asset 源文件，也不能独立执行 Pack and Go。\r\n" +
                         "插件没有打开这些临时文件。请在 SOLIDWORKS 中将组件保存为外部 SLDASM/SLDPRT，确认父装配体引用外部文件，全部保存后重新分类预览。\r\n\r\n" +
-                        string.Join("\r\n", _analysis.UnsupportedAssetRoots),
-                        "Asset 根必须保存为外部文件", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        string.Join("\r\n", _analysis.UnsupportedAssetRoots));
                 }
                 if (upgradeAssets.Count != 0)
                 {
-                    MessageBox.Show(this,
-                        "检测到 " + upgradeAssets.Count + " 个 Asset 必须提升版本。\r\n" +
+                    notices.Add("检测到 " + upgradeAssets.Count + " 个 Asset 必须提升版本。\r\n" +
                         "插件已尝试直接打开这些模型，请修改文件级属性 asset_version 并保存。\r\n" +
                         "完成后切回总装配体，重新执行分类预览。\r\n\r\n" +
-                        string.Join("\r\n\r\n", upgradeAssets),
-                        "必须提升 Asset 版本", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        string.Join("\r\n\r\n", upgradeAssets));
+                }
+                foreach (var error in _analysis.ValidationErrors)
+                    notices.Add(error);
+                if (notices.Count != 0)
+                {
+                    MessageBox.Show(this,
+                        "分类预览已完成全部可执行检查，共发现 " + notices.Count + " 组问题。\r\n" +
+                        "请一次性处理完后重新执行分类预览。\r\n\r\n" +
+                        string.Join("\r\n\r\n", notices),
+                        "分类预览检查结果", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
             catch (Exception ex)
@@ -217,20 +252,41 @@ namespace SolidWorksAssetExporter.AddIn
                 {
                     SetBusy(true, false);
                     _status.Text = "本地导出完成，正在上传 Wanxiang 数据服务...";
-                    upload = await Task.Run(delegate { return _uploader.Upload(completion, settings); });
+                    _status.ForeColor = Color.DarkBlue;
+                    _status.Refresh();
+                    upload = await Task.Run(delegate
+                    {
+                        try
+                        {
+                            var result = _uploader.Upload(completion, settings, ReportUploadProgress);
+                            ReportUploadProgress("Wanxiang 后台上传任务已结束，正在刷新完成界面...");
+                            return result;
+                        }
+                        catch
+                        {
+                            ReportUploadProgress("Wanxiang 后台上传任务已结束，正在显示错误信息...");
+                            throw;
+                        }
+                    });
+                    _lastUploadLogPath = upload.UploadLogPath;
+                    _viewUploadLog.Enabled = File.Exists(_lastUploadLogPath);
                 }
                 var uploadText = upload == null ? "未启用" : string.Format(
-                    "完成（Asset 目录 {0}，新注册 {1}，已注册 {2}，Project {3}，注册接口 {4}）",
+                    "完成（Asset 原子发布 {0}，新注册 {1}，幂等复用 {2}，Project {3}，注册表 {4}）\r\n上传日志: {5}",
                     upload.AssetDirectoriesUploaded, upload.AssetVersionsRegistered,
-                    upload.AssetVersionsAlreadyRegistered, upload.RemoteProjectDirectory, upload.RemoteRegistryPath);
+                    upload.AssetVersionsAlreadyRegistered, upload.RemoteProjectDirectory,
+                    upload.RemoteRegistryPath, upload.UploadLogPath);
                 var localBackupText = completion.LocalPackageBackups.Count == 0 ? "无" :
                     completion.LocalPackageBackups.Count + " 个（保存在 Asset 根目录的 .local-package-backups 中）";
                 MessageBox.Show(this, string.Format("导出完成。\r\nProject: {0}\r\n新建 Asset: {1}\r\n复用 Asset: {2}\r\nProject 复用: {3}\r\n本地冲突包备份: {4}\r\n远端上传: {5}",
-                    completion.ProjectDirectory, completion.CreatedAssets, completion.ReusedAssets,
-                    completion.ProjectReused ? "是" : "否", localBackupText, uploadText),
+                    settings.ExportProject ? completion.ProjectDirectory : "未选择导出",
+                    completion.CreatedAssets, completion.ReusedAssets,
+                    settings.ExportProject ? (completion.ProjectReused ? "是" : "否") : "不适用", localBackupText, uploadText),
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 _analysis = null; _export.Enabled = false;
                 _status.Text = "导出完成。";
+                _status.ForeColor = Color.DarkGreen;
+                _status.Refresh();
             }
             catch (OperationCanceledException)
             {
@@ -241,13 +297,24 @@ namespace SolidWorksAssetExporter.AddIn
             catch (Exception ex)
             {
                 var prefix = localCompleted ? "本地导出已完成，但上传失败；本地文件不会删除，可直接重试。\r\n" : string.Empty;
+                if (localCompleted)
+                {
+                    _lastUploadLogPath = WanxiangUploadLog.FindLatest();
+                    _viewUploadLog.Enabled = File.Exists(_lastUploadLogPath);
+                    if (!string.IsNullOrWhiteSpace(_lastUploadLogPath))
+                        prefix += "上传日志: " + _lastUploadLogPath + "\r\n";
+                }
                 _status.Text = localCompleted ? "上传失败，本地导出已保留。" : "导出失败。";
+                _status.ForeColor = Color.DarkRed;
                 MessageBox.Show(this, prefix + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
                 SetBusy(false, false);
                 _export.Enabled = _analysis != null && _analysis.CanExport;
+                _viewUploadLog.Enabled = File.Exists(_lastUploadLogPath);
+                _status.Refresh();
+                Update();
             }
         }
 
@@ -256,6 +323,46 @@ namespace SolidWorksAssetExporter.AddIn
             _status.Text = phase + "（取消会在当前 SOLIDWORKS 操作结束后生效）";
             _status.Refresh();
             Application.DoEvents();
+        }
+
+        private void ReportUploadProgress(string phase)
+        {
+            if (IsDisposed || Disposing) return;
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action<string>(ReportUploadProgress), phase); }
+                catch (InvalidOperationException) { }
+                return;
+            }
+            var latest = WanxiangUploadLog.FindLatest();
+            if (!string.IsNullOrWhiteSpace(latest)) _lastUploadLogPath = latest;
+            _viewUploadLog.Enabled = File.Exists(_lastUploadLogPath);
+            _status.Text = phase;
+            _status.ForeColor = phase.IndexOf("失败", StringComparison.Ordinal) >= 0
+                ? Color.DarkRed : Color.DarkBlue;
+            _status.Refresh();
+            Update();
+        }
+
+        private void OpenUploadLog()
+        {
+            var path = !string.IsNullOrWhiteSpace(_lastUploadLogPath)
+                ? _lastUploadLogPath : WanxiangUploadLog.FindLatest();
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                MessageBox.Show(this, "还没有可查看的 Wanxiang 上传日志。", Text,
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "无法打开上传日志：" + ex.Message + "\r\n" + path,
+                    Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void RequestCancellation()
@@ -270,16 +377,26 @@ namespace SolidWorksAssetExporter.AddIn
         private void SetBusy(bool busy, bool canCancel)
         {
             _busy = busy;
-            _assetRoot.Enabled = !busy; _projectRoot.Enabled = !busy;
-            _step.Enabled = !busy; _stl.Enabled = !busy; _upload.Enabled = !busy;
+            _assetRoot.Enabled = !busy; _exportProject.Enabled = !busy;
+            _upload.Enabled = !busy;
             _serviceUrl.Enabled = !busy; _apiKey.Enabled = !busy;
             _saveRegistryLocally.Enabled = !busy;
             foreach (var browse in _browseButtons) browse.Enabled = !busy;
+            UpdateProjectControls(busy);
             _analyze.Enabled = !busy; _close.Enabled = !busy;
             _export.Enabled = !busy && _analysis != null && _analysis.CanExport;
             _cancel.Visible = busy && canCancel;
             _cancel.Enabled = busy && canCancel && !_cancelRequested;
             UseWaitCursor = busy && !canCancel;
+        }
+
+        private void UpdateProjectControls(bool busy)
+        {
+            var enabled = !busy && _exportProject.Checked;
+            _projectRoot.Enabled = enabled;
+            if (_projectBrowse != null) _projectBrowse.Enabled = enabled;
+            _step.Enabled = enabled;
+            _stl.Enabled = enabled;
         }
 
         private void ExportDialogFormClosing(object sender, FormClosingEventArgs args)

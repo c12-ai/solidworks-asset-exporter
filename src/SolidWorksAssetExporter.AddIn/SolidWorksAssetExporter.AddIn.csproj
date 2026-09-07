@@ -57,6 +57,7 @@
     <Compile Include="SwExportServices.cs" />
     <Compile Include="WanxiangDataClient.cs" />
     <Compile Include="WanxiangExportUploader.cs" />
+    <Compile Include="WanxiangUploadLog.cs" />
     <Compile Include="WanxiangRegistryProvider.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

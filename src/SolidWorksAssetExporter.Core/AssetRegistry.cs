@@ -21,9 +21,10 @@ namespace SolidWorksAssetExporter.Core
         [DataMember(Name = "asset_id", Order = 1)] public string AssetId { get; set; }
         [DataMember(Name = "uuid", Order = 2)] public string Uuid { get; set; }
         [DataMember(Name = "version", Order = 3)] public int Version { get; set; }
-        [DataMember(Name = "relative_directory", Order = 4)] public string RelativeDirectory { get; set; }
-        [DataMember(Name = "content_fingerprint", Order = 5)] public string ContentFingerprint { get; set; }
-        [DataMember(Name = "registered_utc", Order = 6)] public string RegisteredUtc { get; set; }
+        [DataMember(Name = "name", Order = 4, EmitDefaultValue = false)] public string Name { get; set; }
+        [DataMember(Name = "relative_directory", Order = 5)] public string RelativeDirectory { get; set; }
+        [DataMember(Name = "content_fingerprint", Order = 6)] public string ContentFingerprint { get; set; }
+        [DataMember(Name = "registered_utc", Order = 7)] public string RegisteredUtc { get; set; }
     }
 
     public enum AssetVersionDecisionKind
@@ -330,6 +331,8 @@ namespace SolidWorksAssetExporter.Core
             return string.Equals(left.AssetId, right.AssetId, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(left.Uuid, right.Uuid, StringComparison.OrdinalIgnoreCase) &&
                 left.Version == right.Version &&
+                string.Equals(left.Name ?? string.Empty, right.Name ?? string.Empty,
+                    StringComparison.Ordinal) &&
                 string.Equals((left.RelativeDirectory ?? string.Empty).Replace('\\', '/'),
                     (right.RelativeDirectory ?? string.Empty).Replace('\\', '/'), StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(left.ContentFingerprint, right.ContentFingerprint, StringComparison.OrdinalIgnoreCase);

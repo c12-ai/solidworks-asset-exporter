@@ -25,18 +25,29 @@ namespace SolidWorksAssetExporter.AddIn
         [DataMember(Name = "upload_after_export", Order = 5)] public bool UploadAfterExport { get; set; }
         [DataMember(Name = "wanxiang_base_url", Order = 6)] public string WanxiangBaseUrl { get; set; }
         [DataMember(Name = "save_registry_locally", Order = 8)] public bool SaveRegistryLocally { get; set; }
+        [DataMember(Name = "export_project", Order = 9, EmitDefaultValue = false)]
+        public bool? ExportProjectOption { get; set; }
+        [IgnoreDataMember]
+        public bool ExportProject
+        {
+            get { return !ExportProjectOption.HasValue || ExportProjectOption.Value; }
+            set { ExportProjectOption = value; }
+        }
         [IgnoreDataMember] public string WanxiangApiKey { get; set; }
 
         public void Validate()
         {
             if (string.IsNullOrWhiteSpace(AssetLibraryRoot)) throw new ValidationException("必须设置 Asset 资产库根目录。");
-            if (string.IsNullOrWhiteSpace(ProjectExportRoot)) throw new ValidationException("必须设置 Project 导出根目录。");
             AssetLibraryRoot = Path.GetFullPath(AssetLibraryRoot);
-            ProjectExportRoot = Path.GetFullPath(ProjectExportRoot);
-            var asset = AssetLibraryRoot.TrimEnd('\\') + "\\";
-            var project = ProjectExportRoot.TrimEnd('\\') + "\\";
-            if (asset.StartsWith(project, StringComparison.OrdinalIgnoreCase) || project.StartsWith(asset, StringComparison.OrdinalIgnoreCase))
-                throw new ValidationException("Asset 资产库和 Project 导出目录不能相同或相互嵌套。");
+            if (ExportProject)
+            {
+                if (string.IsNullOrWhiteSpace(ProjectExportRoot)) throw new ValidationException("选择导出 Project 时必须设置 Project 导出根目录。");
+                ProjectExportRoot = Path.GetFullPath(ProjectExportRoot);
+                var asset = AssetLibraryRoot.TrimEnd('\\') + "\\";
+                var project = ProjectExportRoot.TrimEnd('\\') + "\\";
+                if (asset.StartsWith(project, StringComparison.OrdinalIgnoreCase) || project.StartsWith(asset, StringComparison.OrdinalIgnoreCase))
+                    throw new ValidationException("Asset 资产库和 Project 导出目录不能相同或相互嵌套。");
+            }
             ValidateWanxiang();
         }
 
@@ -58,7 +69,6 @@ namespace SolidWorksAssetExporter.AddIn
 
     public static class WanxiangRemoteLayout
     {
-        public const string Assets = "assets";
         public const string Projects = "projects";
         public const string AssetRegistryEndpoint = "/asset/registry";
     }

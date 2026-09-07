@@ -13,22 +13,26 @@ namespace SolidWorksAssetExporter.Core
         public const string AssetVersion = "asset_version";
         public const string AssemblyVersion = "assembly_version";
         public const string AssetClass = "class";
+        public const string PartName = "零件名";
+        public const string DesignPurpose = "设计目的";
+        public const string IsTool = "is_tool";
+        public const string IsFixture = "is_fixture";
+        public const string IsQuickChanger = "is_quick_changer";
+        public const string QuickChangerSide = "quick_changer_side";
+        public const string IsQuickChangerRack = "is_quick_changer_rack";
+        public const string ConnectionInterface = "connection_interface";
+        public const string AcceptsInterfaces = "accepts_interfaces";
+        public const string IsAdjustable = "is_adjustable";
+        public const string HasQrCode = "has_QRcode";
+
+        private static readonly string[] BooleanAssetProperties =
+            { IsTool, IsFixture, IsQuickChanger, IsQuickChangerRack, IsAdjustable, HasQrCode };
 
         public static IDictionary<string, string> Merge(ModelDescriptor model)
         {
             if (model == null) throw new ValidationException("模型元数据为空。");
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             Copy(result, model.FileProperties, "文件级");
-            if (model.ConfigurationProperties != null)
-            {
-                foreach (var pair in model.ConfigurationProperties)
-                {
-                    if (result.ContainsKey(pair.Key))
-                        throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                            "模型 [{0}] 的属性 [{1}] 同时存在于文件级和配置级，不能确定唯一值。", model.FileName, pair.Key));
-                    result.Add(pair.Key, pair.Value ?? string.Empty);
-                }
-            }
             return result;
         }
 
@@ -37,8 +41,157 @@ namespace SolidWorksAssetExporter.Core
             if (model == null) throw new ValidationException("模型元数据为空。");
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             CopyClassification(result, model.FileProperties, "文件级", model.FileName);
-            CopyClassification(result, model.ConfigurationProperties, "配置级", model.FileName);
             return result;
+        }
+
+        public static IList<string> MissingOrBlankProperties(IDictionary<string, string> properties,
+            IEnumerable<string> requiredNames)
+        {
+            var missing = new List<string>();
+            if (requiredNames == null) return missing;
+            foreach (var name in requiredNames.Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                string value;
+                if (properties == null || !properties.TryGetValue(name, out value) ||
+                    string.IsNullOrWhiteSpace(value))
+                    missing.Add(name);
+            }
+            return missing;
+        }
+
+        public static IList<string> ValidateAssetConnectionProperties(
+            IDictionary<string, string> properties)
+        {
+            var issues = new List<string>();
+            var flags = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in BooleanAssetProperties)
+            {
+                bool value;
+                string raw;
+                if (!TryReadBoolean(properties, name, out value, out raw))
+                    issues.Add("属性 [" + name + "] 必须使用 1/0、true/false 或 yes/no；当前值为 [" + raw + "]。");
+                flags[name] = value;
+            }
+
+            var isRobot = IsRobotClass(properties);
+            var isTool = flags[IsTool];
+            var isFixture = flags[IsFixture];
+            var isQuickChanger = flags[IsQuickChanger];
+            var isQuickChangerRack = flags[IsQuickChangerRack];
+            var side = ReadTrimmed(properties, QuickChangerSide);
+            var connection = ReadTrimmed(properties, ConnectionInterface);
+            var accepts = ReadTrimmed(properties, AcceptsInterfaces);
+
+            if (isQuickChanger)
+            {
+                if (side != "robot_side" && side != "tool_side")
+                    issues.Add("属性 [quick_changer_side] 必须为 [robot_side] 或 [tool_side]。");
+                RequireValue(issues, connection, ConnectionInterface,
+                    "快换盘必须声明自身安装接口");
+                RequireValue(issues, accepts, AcceptsInterfaces,
+                    "快换盘必须声明其可接受的接口");
+            }
+            else if (!string.IsNullOrWhiteSpace(side))
+            {
+                issues.Add("仅当 [is_quick_changer]=1 时才可填写 [quick_changer_side]。");
+            }
+
+            if (isQuickChanger && isQuickChangerRack)
+                issues.Add("同一个 Asset 不能同时是快换盘和快换架。");
+
+            if (isQuickChangerRack)
+            {
+                RequireValue(issues, accepts, AcceptsInterfaces,
+                    "快换架必须声明可停放的接口");
+                var assetClass = ReadTrimmed(properties, AssetClass);
+                if (!string.Equals(assetClass, "structure", StringComparison.Ordinal))
+                    issues.Add("快换架的 [class] 必须为 [structure]。");
+            }
+
+            if (isTool)
+                RequireValue(issues, connection, ConnectionInterface,
+                    "Tool 必须声明自身安装接口");
+            if (isFixture)
+                RequireValue(issues, accepts, AcceptsInterfaces,
+                    "Fixture 必须声明其可接受的接口");
+
+            if (isRobot)
+            {
+                RequireValue(issues, accepts, AcceptsInterfaces,
+                    "Robot 必须声明末端可接受的国标安装接口");
+                if (isTool || isFixture || isQuickChanger || isQuickChangerRack)
+                    issues.Add("[class]=robot 不能同时标记为 Tool、Fixture、快换盘或快换架。");
+            }
+
+            ValidateInterfaceList(issues, AcceptsInterfaces, accepts);
+            if (connection.IndexOf(';') >= 0 || connection.IndexOf('；') >= 0)
+                issues.Add("属性 [connection_interface] 只能填写一个接口；多个可接受接口请填写到 [accepts_interfaces]。");
+            return issues;
+        }
+
+        public static string DescribeAssetConnectionRole(IDictionary<string, string> properties)
+        {
+            bool value;
+            string ignored;
+            if (IsRobotClass(properties)) return "Robot";
+            if (TryReadBoolean(properties, IsQuickChanger, out value, out ignored) && value)
+                return ReadTrimmed(properties, QuickChangerSide) == "robot_side"
+                    ? "快换盘-机器人端" : "快换盘-工具端";
+            if (TryReadBoolean(properties, IsQuickChangerRack, out value, out ignored) && value)
+                return "快换架";
+            if (TryReadBoolean(properties, IsTool, out value, out ignored) && value)
+                return "Tool";
+            if (TryReadBoolean(properties, IsFixture, out value, out ignored) && value)
+                return "Fixture";
+            return "普通 Asset";
+        }
+
+        private static bool TryReadBoolean(IDictionary<string, string> properties, string key,
+            out bool value, out string rawValue)
+        {
+            rawValue = ReadTrimmed(properties, key);
+            if (string.IsNullOrEmpty(rawValue) || rawValue == "0" ||
+                rawValue.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                rawValue.Equals("no", StringComparison.OrdinalIgnoreCase))
+            {
+                value = false;
+                return true;
+            }
+            if (rawValue == "1" || rawValue.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                rawValue.Equals("yes", StringComparison.OrdinalIgnoreCase))
+            {
+                value = true;
+                return true;
+            }
+            value = false;
+            return false;
+        }
+
+        private static string ReadTrimmed(IDictionary<string, string> properties, string key)
+        {
+            string value;
+            return properties != null && properties.TryGetValue(key, out value)
+                ? (value ?? string.Empty).Trim() : string.Empty;
+        }
+
+        private static void RequireValue(ICollection<string> issues, string value, string propertyName,
+            string reason)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                issues.Add(reason + "，属性 [" + propertyName + "] 不能为空。");
+        }
+
+        private static void ValidateInterfaceList(ICollection<string> issues, string propertyName,
+            string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (value.IndexOf('；') >= 0)
+                issues.Add("属性 [" + propertyName + "] 的多个接口必须使用英文分号 [;] 分隔。");
+            var values = value.Split(new[] { ';', '；' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(item => item.Trim()).Where(item => item.Length != 0).ToList();
+            if (values.Count != values.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+                issues.Add("属性 [" + propertyName + "] 包含重复接口。");
         }
 
         private static void CopyClassification(IDictionary<string, string> target,
@@ -59,7 +212,9 @@ namespace SolidWorksAssetExporter.Core
         {
             return string.Equals(name, IsAsset, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, AssetVersion, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(name, AssemblyVersion, StringComparison.OrdinalIgnoreCase);
+                string.Equals(name, AssemblyVersion, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, AssetClass, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, DesignPurpose, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void Copy(IDictionary<string, string> target, IDictionary<string, string> source, string scope)
@@ -95,6 +250,44 @@ namespace SolidWorksAssetExporter.Core
                     StringComparison.OrdinalIgnoreCase);
             }
             return false;
+        }
+
+        public static string RequireWanxiangAssetClass(IDictionary<string, string> properties, string modelName)
+        {
+            string raw;
+            var value = properties != null && properties.TryGetValue(AssetClass, out raw)
+                ? raw ?? string.Empty : string.Empty;
+            if (value == "movable" || value == "structure" || value == "equipment") return value;
+            if (value == "moveable")
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "Asset 模型 [{0}] 的文件级自定义属性 [class] 使用了旧拼写 [moveable]；" +
+                    "Wanxiang 0.4.0 只接受 [movable]。", modelName));
+            throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                "Asset 模型 [{0}] 必须设置文件级自定义属性 [class]，且值必须精确为 " +
+                "[movable]、[structure] 或 [equipment]（全小写、无首尾空格）。", modelName));
+        }
+
+        public static string BuildRobotId(IDictionary<string, string> properties, string modelName)
+        {
+            var designPurpose = FirstNonBlank(properties, DesignPurpose);
+            if (string.IsNullOrWhiteSpace(designPurpose))
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "Robot 模型 [{0}] 必须填写文件级自定义属性 [设计目的]，用于生成 robot_id。",
+                    modelName));
+            var version = RequirePositiveInteger(properties, AssetVersion, modelName);
+            return designPurpose + ":" + version.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string FirstNonBlank(IDictionary<string, string> properties, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                string raw;
+                if (properties == null || !properties.TryGetValue(key, out raw)) continue;
+                var value = (raw ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+            return string.Empty;
         }
 
         public static int RequirePositiveInteger(IDictionary<string, string> properties, string key, string modelName)

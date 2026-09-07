@@ -70,6 +70,9 @@
     <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\WanxiangExportUploader.cs">
       <Link>AddIn\WanxiangExportUploader.cs</Link>
     </Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\WanxiangUploadLog.cs">
+      <Link>AddIn\WanxiangUploadLog.cs</Link>
+    </Compile>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

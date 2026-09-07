@@ -35,11 +35,18 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Repeated part occurrences share Asset identity", RepeatedPartOccurrencesShareAssetIdentity);
             Run("Hidden/suppressed/envelope nodes are ignored", VisibilityFiltering);
             Run("Mixed root requires fixed component", MixedRootRequiresFixedComponent);
-            Run("Duplicate property scope fails", DuplicatePropertyScopeFails);
+            Run("Configuration properties are ignored for classification", ConfigurationPropertiesIgnoredForClassification);
+            Run("Configuration properties are ignored for metadata", ConfigurationPropertiesIgnoredForMetadata);
+            Run("Required Asset properties report every blank field", RequiredAssetPropertiesReportEveryBlankField);
+            Run("Wanxiang publishable classes use the 0.4.0 spelling", WanxiangPublishableClassContract);
+            Run("Quick changer connection properties are validated together", QuickChangerConnectionPropertiesAreValidatedTogether);
+            Run("Connection roles are derived from class and is flags", ConnectionRolesAreDerived);
             Run("UUIDv5 matches RFC vector", Uuid5KnownVector);
             Run("Asset identity uses creation time and file name only", AssetIdentityUsesCreationTimeAndFileName);
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
             Run("XML has leaf mesh references", XmlLeafReferences);
+            Run("Robot is a Project XML reference and never an Asset", RobotIsProjectReference);
+            Run("Project export can be disabled", ProjectExportCanBeDisabled);
             Run("Manifest validates hashes and conflicts", ManifestValidation);
             Run("Robot Asset is metadata only", RobotAssetIsMetadataOnly);
             Run("Project report validates immutable package", ProjectReportValidation);
@@ -64,8 +71,11 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset registry merge retains remote entries", AssetRegistryMergeRetainsRemoteEntries);
             Run("Asset registry merge rejects content conflicts", AssetRegistryMergeRejectsContentConflicts);
             Run("Wanxiang archive upload uses bearer and filters hidden entries", WanxiangArchiveUploadContract);
-            Run("Wanxiang asset registration uses the atomic Asset API", WanxiangAssetRegistrationContract);
-            Run("Wanxiang export uploads Asset and Project then registers atomically", WanxiangExportUsesAtomicRegistration);
+            Run("Wanxiang Asset publish uses the 0.4.0 atomic API", WanxiangAssetPublishContract);
+            Run("Wanxiang upload diagnostics include HTTP response without API key", WanxiangUploadDiagnosticsAreSafe);
+            Run("Wanxiang upload log is readable and single-line", WanxiangUploadLogIsReadable);
+            Run("Wanxiang export atomically publishes Asset then uploads Project", WanxiangExportUsesAtomicPublication);
+            Run("Wanxiang upload skips Project when disabled", WanxiangUploadSkipsDisabledProject);
             Run("Wanxiang preview reads remote registry without local cache by default", WanxiangPreviewUsesRemoteRegistry);
             Run("Wanxiang missing remote registry is treated as an empty library", WanxiangMissingRegistryIsEmpty);
             Run("Asset preview finds drawings without SOLIDWORKS document operations", DrawingLookupUsesFileSystemOnly);
@@ -80,7 +90,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("SOLIDWORKS mismatched loaded component uses its source document", MismatchedLoadedComponentUsesSourceDocument);
             Run("SOLIDWORKS virtual component is resolved in context and never closed", VirtualComponentIsResolvedInContext);
             Run("SOLIDWORKS plug-in dirty flag is ignored until a user change", PluginDirtyFlagIsIgnoredUntilUserChange);
-            Run("SOLIDWORKS full metadata uses cached model document properties", FullMetadataUsesCachedDocumentProperties);
+            Run("SOLIDWORKS full metadata reads file-level properties only", FullMetadataReadsFilePropertiesOnly);
             Run("SOLIDWORKS operation closes only newly exposed model window", DocumentScopeClosesNewWindow);
             Run("SOLIDWORKS operation preserves user-open model window", DocumentScopePreservesOpenWindow);
             Run("SOLIDWORKS rebuild warning is not an activation failure", DocumentScopeAcceptsRebuildWarning);
@@ -104,6 +114,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             asset.ThrowOnChildren = true;
             asset.Model.FileProperties[PropertyRules.IsAsset] = "yes";
             asset.Model.FileProperties[PropertyRules.AssetVersion] = "2";
+            asset.Model.FileProperties[PropertyRules.AssetClass] = "structure";
             asset.Model.FileProperties[PropertyRules.AssemblyVersion] = "1";
             var scan = new AssemblyScanner().Scan(asset);
             Equal(ScanClassification.AssetBoundary, scan.Classification);
@@ -306,7 +317,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             finally { Directory.Delete(temp, true); }
         }
 
-        private static void FullMetadataUsesCachedDocumentProperties()
+        private static void FullMetadataReadsFilePropertiesOnly()
         {
             var temp = TempDirectory();
             try
@@ -331,9 +342,9 @@ namespace SolidWorksAssetExporter.Core.Tests
                 var model = new SwCadNode(app, component, "/asset-part").Model;
 
                 Equal("1", model.FileProperties[PropertyRules.IsAsset]);
-                Equal("from-model", model.ConfigurationProperties["business_value"]);
+                Equal(0, model.ConfigurationProperties.Count);
                 Equal(true, fileProperties.LastUseCached);
-                Equal(true, configurationProperties.LastUseCached);
+                Equal(0, configurationProperties.Get6Calls);
                 Equal(0, component.CustomPropertyManager.Manager(string.Empty).Get6Calls);
             }
             finally { Directory.Delete(temp, true); }
@@ -623,12 +634,94 @@ namespace SolidWorksAssetExporter.Core.Tests
             Throws<ValidationException>(() => new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step));
         }
 
-        private static void DuplicatePropertyScopeFails()
+        private static void ConfigurationPropertiesIgnoredForClassification()
         {
             var model = Descriptor("dup");
             model.FileProperties["is_asset"] = "false";
-            model.ConfigurationProperties["IS_ASSET"] = "false";
-            Throws<ValidationException>(() => PropertyRules.Merge(model));
+            model.ConfigurationProperties["IS_ASSET"] = "true";
+            var properties = PropertyRules.MergeForClassification(model);
+            True(!PropertyRules.ReadIsAsset(properties));
+
+            model.FileProperties.Clear();
+            properties = PropertyRules.MergeForClassification(model);
+            True(!PropertyRules.ReadIsAsset(properties));
+        }
+
+        private static void ConfigurationPropertiesIgnoredForMetadata()
+        {
+            var model = Descriptor("file-only");
+            model.FileProperties["图号"] = "FILE";
+            model.ConfigurationProperties["图号"] = "CONFIGURATION";
+            model.ConfigurationProperties["配置专用"] = "ignored";
+            var properties = PropertyRules.Merge(model);
+            Equal(1, properties.Count);
+            Equal("FILE", properties["图号"]);
+            True(!properties.ContainsKey("配置专用"));
+        }
+
+        private static void RequiredAssetPropertiesReportEveryBlankField()
+        {
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "零件名", " " },
+                { "设计目的", "用途" }
+            };
+            var missing = PropertyRules.MissingOrBlankProperties(properties,
+                new[] { "零件名", "图号", "设计目的" });
+            Equal(2, missing.Count);
+            Equal("零件名", missing[0]);
+            Equal("图号", missing[1]);
+        }
+
+        private static void WanxiangPublishableClassContract()
+        {
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { PropertyRules.AssetClass, "movable" }
+            };
+            Equal("movable", PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+            properties[PropertyRules.AssetClass] = "Movable";
+            Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+            properties[PropertyRules.AssetClass] = "moveable";
+            Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+            properties[PropertyRules.AssetClass] = "robot";
+            Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+        }
+
+        private static void QuickChangerConnectionPropertiesAreValidatedTogether()
+        {
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { PropertyRules.AssetClass, "movable" },
+                { PropertyRules.IsQuickChanger, "1" },
+                { PropertyRules.QuickChangerSide, "tool_side" },
+                { PropertyRules.ConnectionInterface, "QUICK_CHANGE_PAIR" },
+                { PropertyRules.AcceptsInterfaces, "ISO_9409-1-50-4-M6" }
+            };
+            Equal(0, PropertyRules.ValidateAssetConnectionProperties(properties).Count);
+
+            properties[PropertyRules.QuickChangerSide] = "lower";
+            properties[PropertyRules.ConnectionInterface] = string.Empty;
+            properties[PropertyRules.AcceptsInterfaces] = string.Empty;
+            var issues = PropertyRules.ValidateAssetConnectionProperties(properties);
+            Equal(3, issues.Count);
+            True(issues.Any(value => value.Contains("quick_changer_side")));
+            True(issues.Any(value => value.Contains("connection_interface")));
+            True(issues.Any(value => value.Contains("accepts_interfaces")));
+        }
+
+        private static void ConnectionRolesAreDerived()
+        {
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { PropertyRules.AssetClass, "movable" },
+                { PropertyRules.IsQuickChanger, "1" },
+                { PropertyRules.QuickChangerSide, "robot_side" }
+            };
+            Equal("快换盘-机器人端", PropertyRules.DescribeAssetConnectionRole(properties));
+            properties[PropertyRules.IsQuickChanger] = "0";
+            properties[PropertyRules.IsQuickChangerRack] = "1";
+            Equal("快换架", PropertyRules.DescribeAssetConnectionRole(properties));
         }
 
         private static void Uuid5KnownVector()
@@ -938,6 +1031,70 @@ namespace SolidWorksAssetExporter.Core.Tests
                 True(File.Exists(Path.Combine(destination, Path.GetFileName(assetPath))));
             }
             finally { Directory.Delete(temp, true); }
+        }
+
+        private static void RobotIsProjectReference()
+        {
+            var root = Root();
+            var robot = Node("robot", true, true);
+            robot.ThrowOnChildren = true;
+            robot.Model.InternalCreationTime = string.Empty;
+            MarkRobot(robot, "Hebe", 1);
+            root.Add(robot);
+
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root),
+                ProjectMeshFormat.Step, true);
+            var node = plan.Roots.Single();
+            Equal(ExportNodeKind.Robot, node.Kind);
+            Equal("Hebe:1", node.RobotId);
+            True(string.IsNullOrEmpty(node.AssetId));
+            True(string.IsNullOrEmpty(node.GeometryUuid));
+            True(string.IsNullOrEmpty(node.MeshFile));
+            Equal(0, robot.GetChildrenCalls);
+
+            var temp = TempDirectory();
+            try
+            {
+                var path = Path.Combine(temp, "assembly.xml");
+                AssemblyXmlWriter.Write(path, plan);
+                var element = XDocument.Load(path).Descendants("node").Single();
+                Equal("robot", (string)element.Attribute("kind"));
+                Equal("Hebe:1", (string)element.Element("mesh").Attribute("robot_id"));
+                True(element.Element("mesh").Attribute("asset_id") == null);
+                True(element.Element("mesh").Attribute("file") == null);
+            }
+            finally { Directory.Delete(temp, true); }
+        }
+
+        private static void ProjectExportCanBeDisabled()
+        {
+            var root = Root();
+            root.Model.FileProperties.Remove(PropertyRules.AssemblyVersion);
+            var projectPart = Node("project-part", false, false);
+            projectPart.Model.InternalCreationTime = string.Empty;
+            var asset = Node("asset", false, false);
+            MarkAsset(asset, 1);
+            root.Add(projectPart, asset);
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root),
+                ProjectMeshFormat.Step, false);
+            True(!plan.ExportProject);
+            Equal(0, plan.AssemblyVersion);
+            var project = plan.Roots.Single(value => value.Kind == ExportNodeKind.Project);
+            True(string.IsNullOrEmpty(project.GeometryUuid));
+            True(string.IsNullOrEmpty(project.MeshFile));
+            Equal(1, plan.Roots.Count(value => value.Kind == ExportNodeKind.Asset));
+            ExportPlanValidator.Validate(plan);
+
+            var settings = new ExporterSettings
+            {
+                AssetLibraryRoot = TempDirectory(),
+                ProjectExportRoot = string.Empty,
+                WanxiangBaseUrl = "http://localhost:8100",
+                WanxiangApiKey = "secret-key",
+                ExportProject = false
+            };
+            try { settings.Validate(); }
+            finally { Directory.Delete(settings.AssetLibraryRoot, true); }
         }
 
         private static void RobotAssetIsMetadataOnly()
@@ -1387,33 +1544,98 @@ namespace SolidWorksAssetExporter.Core.Tests
             finally { Directory.Delete(temp, true); }
         }
 
-        private static void WanxiangAssetRegistrationContract()
+        private static void WanxiangAssetPublishContract()
         {
             var uuid = Guid.NewGuid().ToString("D");
             var fingerprint = "atomic-registration-fingerprint";
             var response = "{\"status\":\"registered\",\"registration\":{" +
                 "\"asset_id\":\"" + uuid + ":2\",\"uuid\":\"" + uuid + "\",\"version\":2," +
-                "\"relative_directory\":\"" + uuid + "/v2\",\"content_fingerprint\":\"" +
+                "\"name\":\"底板\",\"relative_directory\":\"" + uuid +
+                "/v2\",\"content_fingerprint\":\"" +
                 fingerprint + "\",\"registered_utc\":\"2026-09-02T08:00:00.000000Z\"}}";
-            var handler = new ResponseHttpHandler(HttpStatusCode.Created, response);
-            using (var client = new WanxiangDataClient("http://localhost:8100", "secret-key", handler))
+            var root = TempDirectory();
+            try
             {
-                var result = client.RegisterAssetVersion(uuid.ToUpperInvariant(), 2, fingerprint);
-                Equal("registered", result.Status);
-                Equal(uuid, result.Registration.Uuid);
-                Equal(2, result.Registration.Version);
-            }
+                var directory = Path.Combine(root, uuid, "v2");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "asset.txt"), "asset");
+                var handler = new ResponseHttpHandler(HttpStatusCode.Created, response);
+                using (var client = new WanxiangDataClient("http://localhost:8100", "secret-key", handler))
+                {
+                    var result = client.PublishAssetVersion(directory, uuid.ToUpperInvariant(), 2, fingerprint);
+                    Equal("registered", result.Status);
+                    Equal(uuid, result.Registration.Uuid);
+                    Equal(2, result.Registration.Version);
+                }
 
-            Equal("POST", handler.Method);
-            Equal("Bearer secret-key", handler.Authorization);
-            True(handler.Url.EndsWith("/asset/registry", StringComparison.Ordinal));
-            var requestBody = Encoding.UTF8.GetString(handler.Body);
-            True(requestBody.Contains("\"uuid\":\"" + uuid + "\""));
-            True(requestBody.Contains("\"version\":2"));
-            True(requestBody.Contains("\"content_fingerprint\":\"" + fingerprint + "\""));
+                Equal("PUT", handler.Method);
+                Equal("Bearer secret-key", handler.Authorization);
+                Equal(fingerprint, handler.ContentFingerprint);
+                True(handler.Url.EndsWith("/asset/" + uuid + "/v2", StringComparison.Ordinal));
+                using (var stream = new MemoryStream(handler.Body))
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Read))
+                    Equal("asset.txt", archive.Entries.Single().FullName);
+
+                var alreadyResponse = response.Replace("\"status\":\"registered\"",
+                    "\"status\":\"already_registered\"");
+                var alreadyHandler = new ResponseHttpHandler(HttpStatusCode.OK, alreadyResponse);
+                using (var client = new WanxiangDataClient("http://localhost:8100", "secret-key",
+                    alreadyHandler))
+                    Equal("already_registered", client.PublishAssetVersion(directory, uuid, 2,
+                        fingerprint).Status);
+            }
+            finally { Directory.Delete(root, true); }
         }
 
-        private static void WanxiangExportUsesAtomicRegistration()
+        private static void WanxiangUploadDiagnosticsAreSafe()
+        {
+            var uuid = Guid.NewGuid().ToString("D");
+            var fingerprint = "diagnostic-fingerprint";
+            var response = "{\"status\":\"registered\",\"registration\":{" +
+                "\"asset_id\":\"" + uuid + ":1\",\"uuid\":\"" + uuid + "\",\"version\":1," +
+                "\"name\":\"测试资产\",\"relative_directory\":\"" + uuid +
+                "/v1\",\"content_fingerprint\":\"" + fingerprint +
+                "\",\"registered_utc\":\"2026-09-04T01:00:00.000000Z\"}}";
+            var root = TempDirectory();
+            try
+            {
+                var directory = Path.Combine(root, uuid, "v1");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "asset.txt"), "asset");
+                var diagnostics = new List<string>();
+                var handler = new ResponseHttpHandler(HttpStatusCode.Created, response);
+                using (var client = new WanxiangDataClient("http://localhost:8100", "secret-key",
+                    handler, diagnostics.Add))
+                {
+                    var result = client.PublishAssetVersion(directory, uuid, 1, fingerprint);
+                    Equal(201, result.HttpStatusCode);
+                }
+                True(diagnostics.Any(value => value.Contains("HTTP REQUEST PUT http://localhost:8100/asset/" +
+                    uuid + "/v1")));
+                True(diagnostics.Any(value => value.Contains("http_status=201") &&
+                    value.Contains("elapsed_ms=") && value.Contains("registered")));
+                True(!diagnostics.Any(value => value.Contains("secret-key")));
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void WanxiangUploadLogIsReadable()
+        {
+            var root = TempDirectory();
+            try
+            {
+                var log = WanxiangUploadLog.CreateInDirectory(root);
+                log.Write("HTTP 201\r\nregistered");
+                True(File.Exists(log.Path));
+                var content = File.ReadAllText(log.Path);
+                True(content.Contains("HTTP 201 registered"));
+                True(!content.Contains("HTTP 201\r\nregistered"));
+                True(WanxiangUploadLog.SummarizeResponse(new string('x', 900)).Contains("[truncated]"));
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void WanxiangExportUsesAtomicPublication()
         {
             var assetRoot = TempDirectory();
             var projectRoot = TempDirectory();
@@ -1433,25 +1655,59 @@ namespace SolidWorksAssetExporter.Core.Tests
                 var settings = WanxiangSettings(assetRoot, projectRoot);
                 settings.UploadAfterExport = true;
                 var handler = new AtomicUploadHttpHandler(uuid, 1, fingerprint);
+                var progress = new List<string>();
 
                 WanxiangUploadCompletion result;
                 using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl, settings.WanxiangApiKey, handler))
-                    result = new WanxiangExportUploader().Upload(client, export, settings);
+                    result = new WanxiangExportUploader().Upload(client, export, settings, progress.Add);
 
-                Equal(3, handler.Requests.Count);
-                Equal("PUT /archive/assets/" + uuid + "/v1", handler.Requests[0]);
+                Equal(2, handler.Requests.Count);
+                Equal("PUT /asset/" + uuid + "/v1", handler.Requests[0]);
                 Equal("PUT /archive/projects/assembly/v1", handler.Requests[1]);
-                Equal("POST /asset/registry", handler.Requests[2]);
                 Equal(1, result.AssetDirectoriesUploaded);
                 Equal(1, result.AssetVersionsRegistered);
                 Equal(0, result.AssetVersionsAlreadyRegistered);
                 Equal("/asset/registry", result.RemoteRegistryPath);
+                True(progress.Any(value => value.Contains("Asset 1/1") && value.Contains("HTTP 201")));
+                True(progress.Any(value => value.Contains("正在打包 Project")));
+                True(progress.Any(value => value.Contains("Project 已收到 HTTP 200")));
+                True(progress.Any(value => value.Contains("全部服务器响应均已收到")));
             }
             finally
             {
                 Directory.Delete(assetRoot, true);
                 Directory.Delete(projectRoot, true);
             }
+        }
+
+        private static void WanxiangUploadSkipsDisabledProject()
+        {
+            var assetRoot = TempDirectory();
+            try
+            {
+                var uuid = Guid.NewGuid().ToString("D");
+                var fingerprint = "asset-only-registration-fingerprint";
+                var assetDirectory = Path.Combine(assetRoot, uuid, "v1");
+                Directory.CreateDirectory(assetDirectory);
+                File.WriteAllText(Path.Combine(assetDirectory, "asset.txt"), "asset");
+                var export = new ExportCompletion();
+                export.AssetDirectories.Add(assetDirectory);
+                export.AssetRegistrations.Add(Registration(uuid, 1, fingerprint));
+                var settings = WanxiangSettings(assetRoot, string.Empty);
+                settings.ExportProject = false;
+                settings.UploadAfterExport = true;
+                var handler = new AtomicUploadHttpHandler(uuid, 1, fingerprint);
+
+                WanxiangUploadCompletion result;
+                using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl,
+                    settings.WanxiangApiKey, handler))
+                    result = new WanxiangExportUploader().Upload(client, export, settings);
+
+                Equal(1, handler.Requests.Count);
+                Equal("PUT /asset/" + uuid + "/v1", handler.Requests[0]);
+                True(string.IsNullOrEmpty(result.RemoteProjectDirectory));
+            }
+            finally { Directory.Delete(assetRoot, true); }
         }
 
         private static void WanxiangPreviewUsesRemoteRegistry()
@@ -1698,6 +1954,16 @@ namespace SolidWorksAssetExporter.Core.Tests
         {
             node.Model.FileProperties[PropertyRules.IsAsset] = "true";
             node.Model.FileProperties[PropertyRules.AssetVersion] = version.ToString(CultureInfo.InvariantCulture);
+            node.Model.FileProperties[PropertyRules.AssetClass] = "structure";
+        }
+
+        private static void MarkRobot(FakeNode node, string designPurpose, int version)
+        {
+            node.Model.FileProperties[PropertyRules.IsAsset] = "true";
+            node.Model.FileProperties[PropertyRules.AssetClass] = "robot";
+            node.Model.FileProperties[PropertyRules.DesignPurpose] = designPurpose;
+            node.Model.FileProperties[PropertyRules.AssetVersion] =
+                version.ToString(CultureInfo.InvariantCulture);
         }
 
         private static Matrix4 Translate(double x, double y, double z)
@@ -1763,6 +2029,7 @@ namespace SolidWorksAssetExporter.Core.Tests
         public string Url { get; private set; }
         public string Method { get; private set; }
         public string Authorization { get; private set; }
+        public string ContentFingerprint { get; private set; }
         public byte[] Body { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -1770,6 +2037,9 @@ namespace SolidWorksAssetExporter.Core.Tests
             Url = request.RequestUri.AbsoluteUri;
             Method = request.Method.Method;
             Authorization = request.Headers.Authorization == null ? string.Empty : request.Headers.Authorization.ToString();
+            IEnumerable<string> fingerprintValues;
+            ContentFingerprint = request.Headers.TryGetValues("X-Content-Fingerprint", out fingerprintValues)
+                ? fingerprintValues.FirstOrDefault() : string.Empty;
             Body = request.Content == null ? new byte[0] : request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
             var response = new HttpResponseMessage(_statusCode) { Content = new StringContent(_body) };
             if (_registryExists.HasValue)
@@ -1802,12 +2072,18 @@ namespace SolidWorksAssetExporter.Core.Tests
             CancellationToken cancellationToken)
         {
             Requests.Add(request.Method.Method + " " + request.RequestUri.AbsolutePath);
-            if (request.Method == HttpMethod.Post && request.RequestUri.AbsolutePath == "/asset/registry")
+            if (request.Method == HttpMethod.Put && request.RequestUri.AbsolutePath ==
+                "/asset/" + _uuid + "/v" + _version.ToString(CultureInfo.InvariantCulture))
             {
+                IEnumerable<string> fingerprintValues;
+                if (!request.Headers.TryGetValues("X-Content-Fingerprint", out fingerprintValues) ||
+                    !string.Equals(fingerprintValues.FirstOrDefault(), _fingerprint, StringComparison.Ordinal))
+                    return Task.FromResult(new HttpResponseMessage((HttpStatusCode)422)
+                        { Content = new StringContent("missing fingerprint") });
                 var registration = "{\"status\":\"registered\",\"registration\":{" +
                     "\"asset_id\":\"" + _uuid + ":" + _version.ToString(CultureInfo.InvariantCulture) +
                     "\",\"uuid\":\"" + _uuid + "\",\"version\":" +
-                    _version.ToString(CultureInfo.InvariantCulture) + ",\"relative_directory\":\"" + _uuid +
+                    _version.ToString(CultureInfo.InvariantCulture) + ",\"name\":\"asset\",\"relative_directory\":\"" + _uuid +
                     "/v" + _version.ToString(CultureInfo.InvariantCulture) +
                     "\",\"content_fingerprint\":\"" + _fingerprint +
                     "\",\"registered_utc\":\"2026-09-02T08:00:00.000000Z\"}}";

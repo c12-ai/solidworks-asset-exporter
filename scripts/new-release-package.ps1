@@ -44,6 +44,38 @@ foreach ($name in $payloadFiles) {
     $payloadSources[$name] = $source
 }
 
+# Refuse to package the stub-based contract build. The contract build defines
+# fake SolidWorks.Interop types inside the add-in assembly, so the DLL can be
+# mapped into SLDWORKS.exe but cannot be queried as the real COM ISwAddin.
+$addInSource = $payloadSources['SolidWorksAssetExporter.AddIn.dll']
+try {
+    $addInAssembly = [Reflection.Assembly]::LoadFrom($addInSource)
+    $referenceNames = @($addInAssembly.GetReferencedAssemblies() | ForEach-Object { $_.Name })
+    $requiredInteropReferences = @(
+        'SolidWorks.Interop.sldworks',
+        'SolidWorks.Interop.swconst',
+        'SolidWorks.Interop.swpublished'
+    )
+    $missingInteropReferences = @($requiredInteropReferences | Where-Object {
+        $referenceNames -notcontains $_
+    })
+    $definesStubInterface = $null -ne $addInAssembly.GetType(
+        'SolidWorks.Interop.swpublished.ISwAddin', $false, $false)
+}
+catch {
+    throw "Cannot inspect add-in assembly '$addInSource': $($_.Exception.Message)"
+}
+
+if ($definesStubInterface -or $missingInteropReferences.Count -gt 0) {
+    $missing = if ($missingInteropReferences.Count -eq 0) {
+        '<none>'
+    }
+    else {
+        $missingInteropReferences -join ', '
+    }
+    throw "Refusing to package a SOLIDWORKS contract-stub build. Missing real Interop references: $missing. Run scripts/build-addin.ps1 -Configuration Release first."
+}
+
 if (Test-Path -LiteralPath $packageRoot) { throw "Release package directory already exists: $packageRoot" }
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
 foreach ($name in $payloadFiles) {
@@ -52,6 +84,14 @@ foreach ($name in $payloadFiles) {
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.cmd') -Destination (Join-Path $packageRoot 'Install.cmd')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination (Join-Path $packageRoot 'Uninstall.cmd')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'set-interactive-user-startup.ps1') -Destination $packageRoot
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-custom-property-templates.ps1') `
+    -Destination (Join-Path $packageRoot 'Install-CustomPropertyTemplates.ps1')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\custom-properties') `
+    -Destination (Join-Path $packageRoot 'custom-properties') -Recurse
+Copy-Item -LiteralPath (Join-Path $repoRoot 'macros') `
+    -Destination (Join-Path $packageRoot 'macros') -Recurse
+Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination (Join-Path $packageRoot 'README.md')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\RELEASING.md') -Destination (Join-Path $packageRoot 'RELEASING.md')
 
 $archive = Join-Path $output "$packageName.zip"
 if (Test-Path -LiteralPath $archive) { throw "Release archive already exists: $archive" }

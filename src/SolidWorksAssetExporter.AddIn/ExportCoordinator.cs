@@ -20,19 +20,24 @@ namespace SolidWorksAssetExporter.AddIn
             ProjectFingerprints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             SourceFileSnapshots = new Dictionary<string, ExportSourceFileSnapshot>(StringComparer.OrdinalIgnoreCase);
             DocumentUpdateStamps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            ValidationErrors = new List<string>();
             CanExport = true;
         }
         public AssemblyExportPlan Plan { get; internal set; }
         public string Preview { get; internal set; }
         public string PlanFingerprint { get; internal set; }
         public string ProjectFingerprint { get; internal set; }
+        public string ProjectVersionMessage { get; internal set; }
+        public string ProjectVersionError { get; internal set; }
         public bool CanExport { get; internal set; }
         public IList<string> UnsupportedAssetRoots { get; private set; }
+        public IList<string> ValidationErrors { get; private set; }
         internal IDictionary<string, AssetInspection> AssetInspections { get; private set; }
         internal IDictionary<string, string> AssetVersionMessages { get; private set; }
         internal IDictionary<string, string> ProjectFingerprints { get; private set; }
         internal IDictionary<string, ExportSourceFileSnapshot> SourceFileSnapshots { get; private set; }
         internal IDictionary<string, int> DocumentUpdateStamps { get; private set; }
+        internal ExistingProjectState ProjectState { get; set; }
         internal string ActiveDocumentPath { get; set; }
         internal string ActiveConfigurationName { get; set; }
     }
@@ -52,7 +57,6 @@ namespace SolidWorksAssetExporter.AddIn
         public bool IsEmbeddedAssetRoot { get; set; }
         public bool RequiresLocalPackageRebuild { get; set; }
         public string LocalPackageError { get; set; }
-        public bool IsRobotAsset { get; set; }
         public IDictionary<string, string> Properties { get; set; }
     }
 
@@ -75,6 +79,8 @@ namespace SolidWorksAssetExporter.AddIn
 
     public sealed class ExportCoordinator
     {
+        private static readonly string[] RequiredAssetProperties =
+            { PropertyRules.PartName, PropertyRules.DesignPurpose };
         private readonly SldWorks _app;
         private readonly SwSourcePackager _packager;
         private readonly SwDrawingExporter _drawings;
@@ -109,13 +115,41 @@ namespace SolidWorksAssetExporter.AddIn
                 throw new ArgumentNullException("registrySnapshot");
             settings.Validate();
             var root = SwAssemblyRoot.FromActiveDocument(_app, _mutationTracker);
-            var scan = new AssemblyScanner().Scan(root);
-            var plan = new ExportPlanBuilder().Build(scan, settings.ProjectMeshFormat);
+            var classificationIssues = new List<string>();
+            var requiredPropertyIssues = new List<string>();
+            CollectClassificationAndRequiredPropertyIssues(root, true, settings.ExportProject, classificationIssues,
+                requiredPropertyIssues, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            if (classificationIssues.Count != 0)
+            {
+                var allIssues = classificationIssues.Concat(requiredPropertyIssues)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                throw new ValidationException(FormatAggregatedIssues(
+                    "分类预览已检查完整棵可见装配树，发现以下问题", allIssues));
+            }
+            AssemblyExportPlan plan;
+            try
+            {
+                var scan = new AssemblyScanner().Scan(root);
+                plan = new ExportPlanBuilder().Build(scan, settings.ProjectMeshFormat, settings.ExportProject);
+            }
+            catch (Exception ex)
+            {
+                if (IsFatal(ex)) throw;
+                var issues = requiredPropertyIssues.Concat(new[] { ex.Message })
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                throw new ValidationException(FormatAggregatedIssues(
+                    "分类预览已完成属性预检查，但导出树无法建立", issues));
+            }
             var result = new AnalysisResult
             {
                 Plan = plan,
                 PlanFingerprint = CalculatePlanFingerprint(plan)
             };
+            foreach (var issue in requiredPropertyIssues)
+            {
+                result.CanExport = false;
+                AddValidationError(result, issue);
+            }
             var assetNodes = Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Asset).ToList();
             var registry = registrySnapshot.Registry;
             var inspectionCache = new Dictionary<string, AssetInspection>(StringComparer.OrdinalIgnoreCase);
@@ -123,6 +157,8 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 foreach (var group in assetNodes.GroupBy(node => node.AssetId, StringComparer.OrdinalIgnoreCase))
                 {
+                    try
+                    {
                     var embeddedRoots = group.Select(node => (SwCadNode)node.Source)
                         .Where(source => AssetSourcePathPolicy.IsSessionEmbeddedModelPath(source.SourcePath))
                         .GroupBy(source => source.SourcePath, StringComparer.OrdinalIgnoreCase)
@@ -209,14 +245,175 @@ namespace SolidWorksAssetExporter.AddIn
                     }
                     else result.CanExport = false;
                     result.AssetInspections[group.Key] = current;
-                    result.AssetVersionMessages[group.Key] = DescribeVersionDecision(current, packageError) +
-                        (current.IsRobotAsset ? " [Robot：纯元数据，不导出 STEP/STL/SLDASM/SLDPRT/SLDDRW]" : string.Empty);
+                    result.AssetVersionMessages[group.Key] = DescribeVersionDecision(current, packageError);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (IsFatal(ex)) throw;
+                        result.CanExport = false;
+                        var first = group.First();
+                        var source = first.Source as SwCadNode;
+                        var detail = "Asset [" + first.Name + "]" +
+                            (source == null || string.IsNullOrWhiteSpace(source.SourcePath)
+                                ? string.Empty : "（" + source.SourcePath + "）") +
+                            " 检查失败：" + ex.Message;
+                        AddValidationError(result, detail);
+                        result.AssetVersionMessages[group.Key] = "[检查失败：" + ex.Message + "]";
+                    }
+                }
+                if (settings.ExportProject)
+                {
+                    InspectProjectFingerprints(result, null, null, fileHashes);
+                    if (!string.IsNullOrWhiteSpace(result.ProjectFingerprint))
+                        InspectProjectVersion(result, settings);
+                }
+                else
+                {
+                    result.ProjectFingerprint = string.Empty;
+                    result.ProjectVersionMessage = "[未选择导出 Project：不检查 assembly_version，不生成 XML/Project 几何]";
                 }
                 CaptureSourceSnapshots(result, root, fileHashes);
             }
             result.Preview = BuildPreview(plan.Roots, result.AssetVersionMessages, registrySnapshot,
-                settings.SaveRegistryLocally);
+                settings.SaveRegistryLocally, result.ProjectVersionMessage, result.ValidationErrors,
+                settings.ExportProject);
             return result;
+        }
+
+        private static void CollectClassificationAndRequiredPropertyIssues(SwCadNode node, bool isRoot,
+            bool exportProject,
+            IList<string> classificationIssues, IList<string> requiredPropertyIssues,
+            ISet<string> inspectedAssetProperties)
+        {
+            if (node == null) return;
+            ModelDescriptor model = null;
+            IDictionary<string, string> properties = null;
+            try
+            {
+                model = node.ClassificationModel;
+                ModelRules.ValidateClassifiable(model);
+                properties = PropertyRules.MergeForClassification(model);
+            }
+            catch (Exception ex)
+            {
+                if (IsFatal(ex)) throw;
+                AddIssue(classificationIssues, "模型 [" + (node.Name ?? "<未命名>") + "]（" +
+                    (node.SourcePath ?? string.Empty) + "）分类属性读取失败：" + ex.Message);
+            }
+
+            var isAsset = properties != null && PropertyRules.ReadIsAsset(properties);
+            if (isRoot && exportProject && properties != null)
+            {
+                try
+                {
+                    PropertyRules.RequirePositiveInteger(properties, PropertyRules.AssemblyVersion, node.Name);
+                }
+                catch (Exception ex)
+                {
+                    if (IsFatal(ex)) throw;
+                    AddIssue(classificationIssues, ex.Message);
+                }
+            }
+
+            if (isAsset)
+            {
+                var isRobot = PropertyRules.IsRobotClass(properties);
+                try
+                {
+                    if (isRobot)
+                        PropertyRules.BuildRobotId(properties, node.Name);
+                    else
+                    {
+                        ModelRules.ValidateExportable(model);
+                        PropertyRules.RequireWanxiangAssetClass(properties, node.Name);
+                        PropertyRules.RequirePositiveInteger(properties, PropertyRules.AssetVersion, node.Name);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (IsFatal(ex)) throw;
+                    AddIssue(classificationIssues, ex.Message);
+                }
+
+                var propertyKey = node.SourcePath ?? node.Name;
+                if (inspectedAssetProperties.Add(propertyKey))
+                {
+                    try
+                    {
+                        var businessProperties = PropertyRules.Merge(node.Model);
+                        if (!isRobot)
+                        {
+                            foreach (var name in PropertyRules.MissingOrBlankProperties(
+                                businessProperties, RequiredAssetProperties))
+                                AddIssue(requiredPropertyIssues, "Asset [" + node.Name + "]（" +
+                                    node.SourcePath + "）的文件级自定义属性 [" + name + "] 缺失或为空白。");
+                        }
+                        foreach (var issue in PropertyRules.ValidateAssetConnectionProperties(businessProperties))
+                            AddIssue(requiredPropertyIssues, "Asset [" + node.Name + "]（" +
+                                node.SourcePath + "）" + issue);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (IsFatal(ex)) throw;
+                        AddIssue(classificationIssues, "Asset [" + node.Name + "]（" +
+                            node.SourcePath + "）自定义属性读取失败：" + ex.Message);
+                    }
+                }
+                return;
+            }
+
+            var children = new List<SwCadNode>();
+            try
+            {
+                foreach (var childValue in node.GetChildren())
+                {
+                    var child = childValue as SwCadNode;
+                    if (child == null) continue;
+                    try
+                    {
+                        if (AssemblyScanner.IsIncluded(child)) children.Add(child);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (IsFatal(ex)) throw;
+                        AddIssue(classificationIssues, "组件 [" + child.Name + "] 状态读取失败：" + ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (IsFatal(ex)) throw;
+                AddIssue(classificationIssues, "模型 [" + node.Name + "] 子组件读取失败：" + ex.Message);
+            }
+
+            if (exportProject && children.Count == 0 && model != null)
+            {
+                try { ModelRules.ValidateExportable(model); }
+                catch (Exception ex)
+                {
+                    if (IsFatal(ex)) throw;
+                    AddIssue(classificationIssues, ex.Message);
+                }
+            }
+            foreach (var child in children)
+                CollectClassificationAndRequiredPropertyIssues(child, false, exportProject, classificationIssues,
+                    requiredPropertyIssues, inspectedAssetProperties);
+        }
+
+        private static string FormatAggregatedIssues(string heading, IList<string> issues)
+        {
+            var builder = new StringBuilder().Append(heading).Append("（")
+                .Append(issues.Count.ToString(CultureInfo.InvariantCulture)).AppendLine(" 项）：");
+            for (var index = 0; index < issues.Count; index++)
+                builder.Append(index + 1).Append(". ").AppendLine(issues[index]);
+            return builder.ToString().TrimEnd();
+        }
+
+        private static void AddIssue(IList<string> issues, string message)
+        {
+            if (issues == null || string.IsNullOrWhiteSpace(message)) return;
+            if (!issues.Any(value => string.Equals(value, message, StringComparison.OrdinalIgnoreCase)))
+                issues.Add(message);
         }
 
         internal IList<string> OpenAssetsRequiringVersionUpgrade(AnalysisResult analysis)
@@ -280,17 +477,18 @@ namespace SolidWorksAssetExporter.AddIn
             return results;
         }
 
-        private AnalysisResult InspectForExport(AnalysisResult result, ExporterSettings settings,
-            Action<string> progress, Func<bool> cancellationRequested)
+        private AnalysisResult InspectProjectFingerprints(AnalysisResult result,
+            Action<string> progress, Func<bool> cancellationRequested, FileFingerprintCache fileHashes)
         {
             result.ProjectFingerprints.Clear();
+            var failed = false;
             var groups = Flatten(result.Plan.Roots).Where(node => node.Kind == ExportNodeKind.Project)
                 .GroupBy(node => node.GeometryUuid, StringComparer.OrdinalIgnoreCase).ToList();
-            using (var fileHashes = new FileFingerprintCache())
+            for (var index = 0; index < groups.Count; index++)
             {
-                for (var index = 0; index < groups.Count; index++)
+                var group = groups[index];
+                try
                 {
-                    var group = groups[index];
                     Checkpoint(progress, cancellationRequested, "计算 Project 指纹 " +
                         (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
                         groups.Count.ToString(CultureInfo.InvariantCulture) + "：" + group.First().Name);
@@ -302,13 +500,50 @@ namespace SolidWorksAssetExporter.AddIn
                     var fingerprints = sources.Select(source =>
                             _packager.ContentFingerprint(source, fileHashes.Sha256))
                         .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                    if (fingerprints.Count != 1) throw new ValidationException("同一 Project 单元 UUID 的多个源模型具有不同内容: " + group.Key);
+                    if (fingerprints.Count != 1) throw new ValidationException(
+                        "同一 Project 单元 UUID 的多个源模型具有不同内容: " + group.Key);
                     result.ProjectFingerprints.Add(group.Key, fingerprints[0]);
+                }
+                catch (Exception ex)
+                {
+                    if (IsFatal(ex)) throw;
+                    failed = true;
+                    result.CanExport = false;
+                    AddValidationError(result, "Project [" + group.First().Name + "] 检查失败：" + ex.Message);
                 }
             }
 
+            if (failed)
+            {
+                result.ProjectFingerprint = string.Empty;
+                result.ProjectVersionMessage = "[Project 指纹检查存在错误，不能判断 assembly_version]";
+                return result;
+            }
             result.ProjectFingerprint = CalculateProjectFingerprint(result.Plan, result.ProjectFingerprints);
             return result;
+        }
+
+        private static void InspectProjectVersion(AnalysisResult result, ExporterSettings settings)
+        {
+            var plan = result.Plan;
+            var destination = ProjectVersionDirectory(settings, plan);
+            try
+            {
+                result.ProjectState = ProjectReportValidator.Inspect(destination, plan.AssemblyUuid,
+                    plan.AssemblyVersion, result.ProjectFingerprint);
+                result.ProjectVersionMessage = result.ProjectState == ExistingProjectState.Reusable
+                    ? "[Project 指纹一致：assembly_version v" +
+                        plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + " 可直接复用]"
+                    : "[新 Project：分类预览已完成指纹检查；导出时创建 assembly_version v" +
+                        plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + "]";
+            }
+            catch (ValidationException ex)
+            {
+                result.CanExport = false;
+                result.ProjectVersionError = ex.Message;
+                result.ProjectVersionMessage = "[Project 版本校验失败：" + ex.Message + "]";
+                AddValidationError(result, "Project 版本校验失败：" + ex.Message);
+            }
         }
 
         public ExportCompletion Export(AnalysisResult previewed, ExporterSettings settings)
@@ -320,19 +555,22 @@ namespace SolidWorksAssetExporter.AddIn
             Action<string> progress, Func<bool> cancellationRequested)
         {
             if (previewed == null) throw new ArgumentNullException("previewed");
-            if (!previewed.CanExport) throw new ValidationException("预览发现 Asset 版本需要调整，不能继续导出。");
+            if (!previewed.CanExport) throw new ValidationException("预览发现 Asset/Project 版本需要调整，不能继续导出。");
             settings.Validate();
+            if (settings.ExportProject != previewed.Plan.ExportProject)
+                throw new ValidationException("导出 Project 选项在预览后发生变化，请重新分类预览。");
             RevalidatePreview(previewed, settings, progress, cancellationRequested);
 
             var activeDocument = _app.ActiveDoc as ModelDoc2;
             var completion = new ExportCompletion();
             using (new SwSelectionScope(activeDocument))
             {
-                var current = InspectForExport(previewed, settings, progress, cancellationRequested);
+                var current = previewed;
                 using (new SwExportPreferenceScope(_app))
                 {
                     ExportAssets(current, settings, completion, progress, cancellationRequested);
-                    ExportProject(current, settings, completion, progress, cancellationRequested);
+                    if (settings.ExportProject)
+                        ExportProject(current, settings, completion, progress, cancellationRequested);
                 }
             }
             if (progress != null) progress("本地导出完成");
@@ -403,6 +641,24 @@ namespace SolidWorksAssetExporter.AddIn
                     }
                 }
             }
+
+            if (settings.ExportProject)
+            {
+                Checkpoint(progress, cancellationRequested, "重新校验预览后的 Project 版本状态");
+                ExistingProjectState projectState;
+                try
+                {
+                    projectState = ProjectReportValidator.Inspect(
+                        ProjectVersionDirectory(settings, previewed.Plan), previewed.Plan.AssemblyUuid,
+                        previewed.Plan.AssemblyVersion, previewed.ProjectFingerprint);
+                }
+                catch (ValidationException ex)
+                {
+                    throw new ValidationException("Project 本地包在分类预览后发生变化，请重新预览：" + ex.Message);
+                }
+                if (projectState != previewed.ProjectState)
+                    throw new ValidationException("Project 本地版本状态在分类预览后发生变化，请重新预览。");
+            }
         }
 
         private void CaptureSourceSnapshots(AnalysisResult result, SwCadNode root,
@@ -420,7 +676,11 @@ namespace SolidWorksAssetExporter.AddIn
             var hashedAssetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             AddSnapshotPath(paths, activePath);
             foreach (var node in Flatten(result.Plan.Roots))
+            {
+                if (node.Kind == ExportNodeKind.Robot) continue;
+                if (node.Kind == ExportNodeKind.Project && !result.Plan.ExportProject) continue;
                 AddSnapshotPath(paths, ((SwCadNode)node.Source).SourcePath);
+            }
             foreach (var inspection in result.AssetInspections.Values)
             {
                 foreach (var path in inspection.ModelFiles ?? new List<string>())
@@ -438,12 +698,34 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var path in paths.OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
             {
                 if (AssetSourcePathPolicy.IsSessionEmbeddedModelPath(path)) continue;
-                var snapshot = ExportSourceFileSnapshot.Capture(path,
-                    hashedAssetFiles.Contains(path) ? new Func<string, string>(fileHashes.Sha256) : null);
-                result.SourceFileSnapshots.Add(snapshot.Path, snapshot);
-                var open = _app.GetOpenDocumentByName(snapshot.Path) as ModelDoc2;
-                if (open != null) result.DocumentUpdateStamps[snapshot.Path] = SafeUpdateStamp(open);
+                try
+                {
+                    var snapshot = ExportSourceFileSnapshot.Capture(path,
+                        hashedAssetFiles.Contains(path) ? new Func<string, string>(fileHashes.Sha256) : null);
+                    result.SourceFileSnapshots.Add(snapshot.Path, snapshot);
+                    var open = _app.GetOpenDocumentByName(snapshot.Path) as ModelDoc2;
+                    if (open != null) result.DocumentUpdateStamps[snapshot.Path] = SafeUpdateStamp(open);
+                }
+                catch (Exception ex)
+                {
+                    if (IsFatal(ex)) throw;
+                    result.CanExport = false;
+                    AddValidationError(result, "源文件快照失败 [" + path + "]：" + ex.Message);
+                }
             }
+        }
+
+        private static void AddValidationError(AnalysisResult result, string message)
+        {
+            if (result == null || string.IsNullOrWhiteSpace(message)) return;
+            if (!result.ValidationErrors.Contains(message, StringComparer.OrdinalIgnoreCase))
+                result.ValidationErrors.Add(message);
+        }
+
+        private static bool IsFatal(Exception exception)
+        {
+            return exception is OutOfMemoryException || exception is StackOverflowException ||
+                exception is AccessViolationException || exception is AppDomainUnloadedException;
         }
 
         private static void AddSnapshotPath(ISet<string> paths, string path)
@@ -495,7 +777,7 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 Node = source, Uuid = node.GeometryUuid, Fingerprint = fingerprint, Version = version,
                 State = ExistingAssetState.Missing, ModelFiles = modelFiles, Drawings = drawings,
-                Properties = properties, IsRobotAsset = PropertyRules.IsRobotClass(properties)
+                Properties = properties
             };
         }
 
@@ -523,30 +805,20 @@ namespace SolidWorksAssetExporter.AddIn
                 var destination = AssetVersionDirectory(settings, uuid, inspection.Version);
                 using (var transaction = new DirectoryTransaction(destination))
                 {
-                    if (inspection.IsRobotAsset)
-                    {
-                        Checkpoint(progress, cancellationRequested, "Asset " +
-                            (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
-                            assets.Count.ToString(CultureInfo.InvariantCulture) +
-                            "：Robot 跳过 STEP/STL 和 SOLIDWORKS 源文件打包");
-                    }
-                    else
-                    {
-                        Checkpoint(progress, cancellationRequested, "Asset " +
-                            (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
-                            assets.Count.ToString(CultureInfo.InvariantCulture) + "：导出 STEP/STL");
-                        _geometry.ExportBoth(inspection.Node,
-                            Path.Combine(transaction.StagingDirectory, "geometry"));
-                        var sourceDirectory = Path.Combine(transaction.StagingDirectory, "source", "models");
-                        Checkpoint(progress, cancellationRequested, "Asset " +
-                            (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
-                            assets.Count.ToString(CultureInfo.InvariantCulture) + "：打包源模型");
-                        _packager.PackAsset(inspection.Node, inspection.ModelFiles, sourceDirectory);
-                        Checkpoint(progress, cancellationRequested, "Asset " +
-                            (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
-                            assets.Count.ToString(CultureInfo.InvariantCulture) + "：复制源图纸");
-                        _drawings.CopyDrawingSources(inspection.Drawings, sourceDirectory);
-                    }
+                    Checkpoint(progress, cancellationRequested, "Asset " +
+                        (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
+                        assets.Count.ToString(CultureInfo.InvariantCulture) + "：导出 STEP/STL");
+                    _geometry.ExportBoth(inspection.Node,
+                        Path.Combine(transaction.StagingDirectory, "geometry"));
+                    var sourceDirectory = Path.Combine(transaction.StagingDirectory, "source", "models");
+                    Checkpoint(progress, cancellationRequested, "Asset " +
+                        (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
+                        assets.Count.ToString(CultureInfo.InvariantCulture) + "：打包源模型");
+                    _packager.PackAsset(inspection.Node, inspection.ModelFiles, sourceDirectory);
+                    Checkpoint(progress, cancellationRequested, "Asset " +
+                        (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
+                        assets.Count.ToString(CultureInfo.InvariantCulture) + "：复制源图纸");
+                    _drawings.CopyDrawingSources(inspection.Drawings, sourceDirectory);
                     var relativeFiles = Directory.EnumerateFiles(transaction.StagingDirectory, "*", SearchOption.AllDirectories)
                         .Select(path => PathPolicy.RelativeTo(transaction.StagingDirectory, path)).ToList();
                     var manifest = new AssetManifest
@@ -638,9 +910,12 @@ namespace SolidWorksAssetExporter.AddIn
         private static StringBuilder PlanFingerprintMaterial(AssemblyExportPlan plan)
         {
             var builder = new StringBuilder();
-            builder.Append(Canonical.Join(plan.AssemblyUuid, plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture), plan.MeshFormat.ToString()));
+            builder.Append(Canonical.Join(plan.AssemblyUuid,
+                plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture), plan.MeshFormat.ToString(),
+                plan.ExportProject ? "export-project" : "skip-project"));
             foreach (var node in Flatten(plan.Roots))
-                builder.Append(Canonical.Join(node.Id, node.ParentId, node.Name, node.Kind.ToString(), node.AssetId, node.MeshFile,
+                builder.Append(Canonical.Join(node.Id, node.ParentId, node.Name, node.Kind.ToString(),
+                    node.AssetId, node.RobotId, node.MeshFile,
                     node.GeometryUuid, Number(node.Pose.Tx), Number(node.Pose.Ty), Number(node.Pose.Tz),
                     Number(node.Pose.Rotation.X), Number(node.Pose.Rotation.Y), Number(node.Pose.Rotation.Z), Number(node.Pose.Rotation.W)));
             return builder;
@@ -648,7 +923,8 @@ namespace SolidWorksAssetExporter.AddIn
 
         private static string BuildPreview(IEnumerable<ExportNode> roots,
             IDictionary<string, string> assetVersionMessages, WanxiangRegistrySnapshot registrySnapshot,
-            bool savedLocally)
+            bool savedLocally, string projectVersionMessage, IEnumerable<string> validationErrors,
+            bool exportProject)
         {
             var builder = new StringBuilder();
             builder.Append("Wanxiang 注册表: ").Append(registrySnapshot.RemotePath)
@@ -657,17 +933,35 @@ namespace SolidWorksAssetExporter.AddIn
                     ? registrySnapshot.Registry.Assets.Count.ToString(CultureInfo.InvariantCulture) + " 条；"
                     : string.Empty)
                 .Append(savedLocally ? "已保存本地副本]" : "不保存本地副本]")
-                .AppendLine().AppendLine();
+                .AppendLine()
+                .Append("Project 版本: ").AppendLine(string.IsNullOrWhiteSpace(projectVersionMessage)
+                    ? "[未完成版本判断]" : projectVersionMessage)
+                .AppendLine();
+            var errors = (validationErrors ?? Enumerable.Empty<string>()).ToList();
+            if (errors.Count != 0)
+            {
+                builder.Append("分类预览检查问题（")
+                    .Append(errors.Count.ToString(CultureInfo.InvariantCulture)).AppendLine(" 项）：");
+                for (var index = 0; index < errors.Count; index++)
+                    builder.Append(index + 1).Append(". ").AppendLine(errors[index]);
+                builder.AppendLine();
+            }
             var values = roots.ToList();
             var seenAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < values.Count; i++)
                 AppendPreview(builder, values[i], string.Empty, i == values.Count - 1,
-                    assetVersionMessages, seenAssets);
+                    assetVersionMessages, seenAssets, exportProject);
             return builder.ToString().TrimEnd();
         }
 
+        private static string ProjectVersionDirectory(ExporterSettings settings, AssemblyExportPlan plan)
+        {
+            return Path.Combine(settings.ProjectExportRoot, plan.AssemblyUuid,
+                "v" + plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture));
+        }
+
         private static void AppendPreview(StringBuilder builder, ExportNode node, string indent, bool last,
-            IDictionary<string, string> assetVersionMessages, ISet<string> seenAssets)
+            IDictionary<string, string> assetVersionMessages, ISet<string> seenAssets, bool exportProject)
         {
             builder.Append(indent).Append(last ? "└─ " : "├─ ").Append(node.Kind.ToString().PadRight(8)).Append(' ').Append(node.Name);
             if (node.Kind == ExportNodeKind.Asset)
@@ -680,12 +974,17 @@ namespace SolidWorksAssetExporter.AddIn
                 }
                 else builder.Append("  [同一 Asset 的另一实例]");
             }
-            if (node.Kind == ExportNodeKind.Project) builder.Append("  [导出 STEP/STL]");
+            if (node.Kind == ExportNodeKind.Project)
+                builder.Append(exportProject ? "  [导出 STEP/STL]" : "  [未选择导出 Project]");
+            if (node.Kind == ExportNodeKind.Robot)
+                builder.Append(exportProject
+                    ? "  [跳过 Asset/几何；Project XML: robot_id=" + node.RobotId + "]"
+                    : "  [跳过 Asset；未选择导出 Project]");
             builder.AppendLine();
             var children = node.Children.ToList();
             for (var i = 0; i < children.Count; i++)
                 AppendPreview(builder, children[i], indent + (last ? "   " : "│  "), i == children.Count - 1,
-                    assetVersionMessages, seenAssets);
+                    assetVersionMessages, seenAssets, exportProject);
         }
 
         private static string DescribeVersionDecision(AssetInspection inspection, string packageError)
