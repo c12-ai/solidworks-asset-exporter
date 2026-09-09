@@ -695,8 +695,8 @@ namespace SolidWorksAssetExporter.Core.Tests
                 { PropertyRules.AssetClass, "movable" },
                 { PropertyRules.IsQuickChanger, "1" },
                 { PropertyRules.QuickChangerSide, "tool_side" },
-                { PropertyRules.ConnectionInterface, "QUICK_CHANGE_PAIR" },
-                { PropertyRules.AcceptsInterfaces, "ISO_9409-1-50-4-M6" }
+                { PropertyRules.ConnectionInterface, "快换盘-A" },
+                { PropertyRules.AcceptsInterfaces, "法兰-4xM6-PCD30" }
             };
             Equal(0, PropertyRules.ValidateAssetConnectionProperties(properties).Count);
 
@@ -708,6 +708,17 @@ namespace SolidWorksAssetExporter.Core.Tests
             True(issues.Any(value => value.Contains("quick_changer_side")));
             True(issues.Any(value => value.Contains("connection_interface")));
             True(issues.Any(value => value.Contains("accepts_interfaces")));
+
+            var rack = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { PropertyRules.AssetClass, "equipment" },
+                { PropertyRules.IsQuickChangerRack, "1" },
+                { PropertyRules.AcceptsInterfaces, "快换盘-A" }
+            };
+            Equal(0, PropertyRules.ValidateAssetConnectionProperties(rack).Count);
+            rack[PropertyRules.AssetClass] = "structure";
+            True(PropertyRules.ValidateAssetConnectionProperties(rack)
+                .Any(value => value.Contains("equipment")));
         }
 
         private static void ConnectionRolesAreDerived()
@@ -720,6 +731,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             };
             Equal("快换盘-机器人端", PropertyRules.DescribeAssetConnectionRole(properties));
             properties[PropertyRules.IsQuickChanger] = "0";
+            properties[PropertyRules.AssetClass] = "equipment";
             properties[PropertyRules.IsQuickChangerRack] = "1";
             Equal("快换架", PropertyRules.DescribeAssetConnectionRole(properties));
         }

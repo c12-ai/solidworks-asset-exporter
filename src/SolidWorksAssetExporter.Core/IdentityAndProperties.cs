@@ -105,8 +105,8 @@ namespace SolidWorksAssetExporter.Core
                 RequireValue(issues, accepts, AcceptsInterfaces,
                     "快换架必须声明可停放的接口");
                 var assetClass = ReadTrimmed(properties, AssetClass);
-                if (!string.Equals(assetClass, "structure", StringComparison.Ordinal))
-                    issues.Add("快换架的 [class] 必须为 [structure]。");
+                if (!string.Equals(assetClass, "equipment", StringComparison.Ordinal))
+                    issues.Add("快换架不能由机器人搬运但需要参与快换交互，[class] 必须为 [equipment]。");
             }
 
             if (isTool)
