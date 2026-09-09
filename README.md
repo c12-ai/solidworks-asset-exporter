@@ -40,6 +40,11 @@
 
 ## 自定义属性
 
+资产属性协议：
+
+- [Asset Property Protocol（Agent 版）](docs/ASSET_PROPERTY_PROTOCOL_AGENT.md)：确定性的字段值域、属性语义、角色关系和示例。
+- [资产属性协议（工程师版）](docs/ASSET_PROPERTY_PROTOCOL.md)：面向工程师的属性含义、资产关系和示例。
+
 在总装配体根模型设置：
 
 ```text
@@ -65,10 +70,10 @@ asset_version = 1          # 必填正整数
 | `is_asset` | 布尔值 | 是否把当前零件或子装配体作为 Asset。填写 `true`、`1` 或 `yes`。Asset 是硬边界，分类扫描不会继续读取其内部节点。 |
 | `class` | 单选枚举 | Robot 使用 `robot`；发布到 Wanxiang `assets/` 的普通 Asset 只能使用 `movable`、`equipment`、`structure`。旧拼写 `moveable` 会在分类预览中报错。 |
 | `is_tool` | 布尔值 | 是否作为机器人使用的工具。Tool 本身也可以属于 `movable`，例如在快换过程中由机器人 attach；Tool 还需要在后续定义 TCP Point。建议统一填写 `true` 或 `false`。 |
-| `is_fixture` | 布尔值 | 是否具有定位、夹持、承载或接收其他 Asset 的治具功能。`movable` 和 `structure` 都可以同时是 Fixture。 |
+| `is_fixture` | 布尔值 | 是否具有定位、夹持、承载或接收其他 Asset 的治具功能。`movable`、`equipment` 和 `structure` 都可以同时是 Fixture。 |
 | `is_quick_changer` | 布尔值 | 是否为快换盘。快换盘仍使用既有 `class`，不新增 quick-changer class。选中后必须填写 `quick_changer_side`。 |
 | `quick_changer_side` | 枚举 | `robot_side` 表示快换盘-上/机器人端；`tool_side` 表示快换盘-下/工具端。上下盘是两个独立 Asset，并各自拥有 UUID 和版本。 |
-| `is_quick_changer_rack` | 布尔值 | 是否为快换支架。快换支架必须是 `class=structure`，并通过 `accepts_interfaces` 声明可停放接口。 |
+| `is_quick_changer_rack` | 布尔值 | 是否为快换支架。快换支架不能由机器人搬运但需要参与快换交互，必须是 `class=equipment`，并通过 `accepts_interfaces` 声明可停放接口。 |
 | `connection_interface` | 文本 | 当前 Asset 连接到父级 Asset 时提供的单个接口。多个可接受接口应填写到 `accepts_interfaces`。 |
 | `accepts_interfaces` | 文本列表 | 当前 Asset 可以接收的子级机械接口或工件接口；多个值使用英文分号 `;` 分隔。父级的该字段必须包含子级的 `connection_interface`。 |
 | `slots_num` | 非负整数 | 当前 Asset 可提供的安装槽位、工位或容纳位置数量；`0` 表示不提供槽位。 |
@@ -84,10 +89,10 @@ asset_version = 1          # 必填正整数
 
 `class` 的建议含义：
 
-- `movable`：机器人能够通过 Tool 操作的物体，通常设置为 `is_adjustable=false`。后续必须为其定义供 Tool attach 的抓取 Point。Tool 本身也可以属于 `movable`，用于机器人快换。
+- `movable`：机器人能够移动、抓取或转移的物体，通常设置为 `is_adjustable=false`。后续必须为其定义供 Tool attach 的抓取 Point。Tool 本身也可以属于 `movable`。
 - `robot`：执行机构。
-- `equipment`：离心机等外部设备。后续可以定义多个交互 Point，例如按按钮、开盖或其他操作位置。
-- `structure`：不定义交互 Point，也不与机器人直接交互的结构；可以设置 `is_adjustable=true`，表示其空间布局位置允许调整。
+- `equipment`：机器人不能移动其整体、但需要与之交互的 Asset，例如离心机、固定试管架或快换支架。后续可以定义多个交互 Point。
+- `structure`：机器人不能移动且不需要与之交互的结构，例如框架、护栏或纯支撑结构；可以设置 `is_adjustable=true`，表示其空间布局位置允许调整。
 
 以上属性只描述机械工程师在设计阶段能够直接确定的 Asset 分类和接口能力。Position、Area、抓取 Point、TCP Point、设备交互 Point 等空间定义不在当前 Property Tab 中填写，后续直接定义在资产数据中。
 
@@ -104,23 +109,24 @@ asset_version = 1          # 必填正整数
 - `is_tool=true` 时必须填写 `connection_interface`；工具可直接安装到 Robot，也可通过成对快换盘安装。
 - `is_fixture=true` 时必须填写 `accepts_interfaces`，并按需要填写 `slots_num`。
 - `is_quick_changer=true` 时必须同时填写 `quick_changer_side`、`connection_interface` 和 `accepts_interfaces`。
-- `is_quick_changer_rack=true` 时必须使用 `class=structure` 并填写 `accepts_interfaces`。
+- `is_quick_changer_rack=true` 时必须使用 `class=equipment` 并填写 `accepts_interfaces`。
 - `class=robot` 必须填写 `accepts_interfaces`，且不能同时标记为 Tool、Fixture、快换盘或快换架。
-- 接口名称采用精确匹配。机器人法兰和工具安装面推荐复用团队确定的国标名称；快换盘上下盘之间使用独立的快换配对接口名称。
+- 接口名称采用精确匹配并描述真实机械兼容性。螺栓法兰使用明确的孔数、螺纹和分度圆信息，例如 `法兰-4xM6-PCD30`；容纳类接口使用对象类型和决定兼容性的几何特征，例如 `试管-D20`，不单独使用容量名称。快换盘上下盘之间使用独立的快换配对接口名称。
 - `is_adjustable=true` 只表示安装位姿可调，不表示 Asset 的所有机械或工艺参数均可调。
 
-安装角色由 `class` 和上述 `is_` 属性自动推导，不额外填写 role。连接必须同时满足“父级 `accepts_interfaces` 包含子级 `connection_interface`”和角色矩阵。允许的机械链路为 Robot→Tool、Robot→快换盘-上、快换盘-上→快换盘-下、快换盘-下→Tool、快换架→快换盘-下；禁止 Robot→快换盘-下和快换盘-上→Tool。未使用的工具端快换组件应停放在快换架上。
+安装角色由 `class` 和上述 `is_` 属性自动推导，不额外填写 role。业务规范要求连接同时满足“父级 `accepts_interfaces` 包含子级 `connection_interface`”和角色矩阵。允许的机械链路为 Robot→Tool、Robot→快换盘-上、快换盘-上→快换盘-下、快换盘-下→Tool、快换架→快换盘-下；禁止 Robot→快换盘-下、快换盘-上→Tool 和快换盘-下→快换盘-上。当前 `v1.0.6` 自动校验单个 Asset 的角色字段和必填接口，尚未根据 Project 中的实际父子边完整执行上述矩阵；导出前应按专项说明复核连接链。未使用的工具端快换组件应停放在快换架上。
 
 填写示例：
 
 | Asset | `class` | 关键属性 |
 | --- | --- | --- |
-| Robot | `robot` | `accepts_interfaces=ISO_9409-1-50-4-M6`；`设计目的=Hebe`；`asset_version=1` |
-| 快换盘-上 | `movable` | `is_quick_changer=1`；`quick_changer_side=robot_side`；`connection_interface=ISO_9409-1-50-4-M6`；`accepts_interfaces=快换配对接口` |
-| 快换盘-下 | `movable` | `is_quick_changer=1`；`quick_changer_side=tool_side`；`connection_interface=快换配对接口`；`accepts_interfaces=ISO_9409-1-50-4-M6` |
-| 转移夹指 Tool | `movable` | `is_tool=1`；`is_fixture=1`；`connection_interface=ISO_9409-1-50-4-M6`；`accepts_interfaces=压滤瓶夹持接口` |
-| 快换支架 | `structure` | `is_fixture=1`；`is_quick_changer_rack=1`；`connection_interface=工作台安装面`；`accepts_interfaces=快换配对接口`；`slots_num=2` |
-| 50 ml 试管架治具 | `structure` | `is_fixture=1`；`connection_interface=工作台安装面`；`accepts_interfaces=50ML_tube`；`is_adjustable=1` |
+| Robot | `robot` | `accepts_interfaces=法兰-4xM6-PCD30`；`设计目的=Hebe`；`asset_version=1` |
+| 快换盘-上 | `movable` | `is_quick_changer=1`；`quick_changer_side=robot_side`；`connection_interface=法兰-4xM6-PCD30`；`accepts_interfaces=快换盘-A` |
+| 快换盘-下 | `movable` | `is_quick_changer=1`；`quick_changer_side=tool_side`；`connection_interface=快换盘-A`；`accepts_interfaces=法兰-4xM6-PCD30` |
+| 转移夹指 Tool | `movable` | `is_tool=1`；`is_fixture=1`；`connection_interface=法兰-4xM6-PCD30`；`accepts_interfaces=压滤瓶夹持接口` |
+| 快换支架 | `equipment` | `is_fixture=1`；`is_quick_changer_rack=1`；`connection_interface=工作台安装面`；`accepts_interfaces=快换盘-A`；`slots_num=2` |
+| 10 ml 试管 | `movable` | `connection_interface=试管-D20` |
+| 固定试管架 | `equipment` | `is_fixture=1`；`connection_interface=工作台安装面`；`accepts_interfaces=试管-D20`；`is_adjustable=1` |
 
 当前插件使用 `is_asset` 进行分类。所有 Asset（包括 Robot）在 `is_asset=true|1|yes` 时都要求正整数 `asset_version`；Robot 地址固定按“设计目的:asset_version”生成。只有勾选“导出 Project”时才在总装配体上强制要求正整数 `assembly_version`。分类预览会一次性检查必填属性、布尔格式、快换侧别和角色所需接口；通过后，新字段原样保存到非 Robot Asset manifest。
 
