@@ -43,7 +43,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             _coordinator = new ExportCoordinator(application); _store = new SettingsStore();
             _apiKeyStore = new WanxiangApiKeyStore(); _uploader = new WanxiangExportUploader();
-            Text = "SOLIDWORKS Asset / AssemblyPackage 混合导出"; StartPosition = FormStartPosition.CenterScreen;
+            Text = "SOLIDWORKS Asset / assembly_package 混合导出"; StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(850, 720); Size = new Size(980, 860); Font = SystemFonts.MessageBoxFont;
             BuildUi(); LoadSettings();
             FormClosing += ExportDialogFormClosing;
@@ -66,11 +66,11 @@ namespace SolidWorksAssetExporter.AddIn
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
             AddLabel(layout, "Asset 本地输出根目录", 0); AddPathRow(layout, _assetRoot, 0);
-            AddLabel(layout, "AssemblyPackage 本地输出根目录", 1); _projectBrowse = AddPathRow(layout, _projectRoot, 1);
-            _exportProject.Text = "导出 AssemblyPackage（装配包；Robot 仅写 robot_id 地址）";
+            AddLabel(layout, "assembly_package 本地输出根目录", 1); _projectBrowse = AddPathRow(layout, _projectRoot, 1);
+            _exportProject.Text = "导出 assembly_package（装配包；Robot 仅写 robot_id 地址）";
             _exportProject.AutoSize = true; _exportProject.Dock = DockStyle.Fill;
             layout.Controls.Add(_exportProject, 1, 2); layout.SetColumnSpan(_exportProject, 2);
-            AddLabel(layout, "XML AssemblyPackage mesh", 3);
+            AddLabel(layout, "XML assembly_package mesh", 3);
             var formats = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
             _step.Text = "STEP"; _step.AutoSize = true; _stl.Text = "STL"; _stl.AutoSize = true; formats.Controls.Add(_step); formats.Controls.Add(_stl);
             layout.Controls.Add(formats, 1, 3); layout.SetColumnSpan(formats, 2);
@@ -88,7 +88,7 @@ namespace SolidWorksAssetExporter.AddIn
             _saveRegistryLocally.AutoSize = true; _saveRegistryLocally.Dock = DockStyle.Fill;
             layout.Controls.Add(_saveRegistryLocally, 1, 8); layout.SetColumnSpan(_saveRegistryLocally, 2);
 
-            var hint = new Label { Text = "本地整机称为 AssemblyPackage；上传后仍是 Wanxiang Project（projects）；Robot 仅在装配包 XML 中写 robot_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
+            var hint = new Label { Text = "本地整机称为 assembly_package；上传后仍是 Wanxiang Project（projects）；Robot 仅在装配包 XML 中写 robot_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
             layout.Controls.Add(hint, 0, 9); layout.SetColumnSpan(hint, 3);
             _preview.Multiline = true; _preview.ReadOnly = true; _preview.ScrollBars = ScrollBars.Both; _preview.WordWrap = false;
             _preview.Font = new Font(FontFamily.GenericMonospace, 9f); _preview.Dock = DockStyle.Fill;
@@ -185,15 +185,15 @@ namespace SolidWorksAssetExporter.AddIn
                 _preview.Refresh();
                 var registry = await Task.Run(delegate { return _coordinator.FetchWanxiangRegistry(settings); });
                 _preview.Text = settings.ExportProject
-                    ? "正在读取 Asset/AssemblyPackage 源文件和内容指纹，并在分类预览阶段判断 asset_version/assembly_version..."
-                    : "正在读取 Asset 源文件和内容指纹；本次不导出 AssemblyPackage...";
+                    ? "正在读取 Asset/assembly_package 源文件和内容指纹，并在分类预览阶段判断 asset_version/assembly_version..."
+                    : "正在读取 Asset 源文件和内容指纹；本次不导出 assembly_package...";
                 _status.Text = settings.ExportProject
-                    ? "分类装配树、检查 Asset/AssemblyPackage 版本并建立导出快照..."
+                    ? "分类装配树、检查 Asset/assembly_package 版本并建立导出快照..."
                     : "分类装配树、检查 Asset 版本并建立导出快照...";
                 _preview.Refresh();
                 _analysis = _coordinator.Analyze(settings, registry); _preview.Text = _analysis.Preview;
                 _store.Save(settings); _export.Enabled = _analysis.CanExport;
-                _status.Text = _analysis.CanExport ? "预览完成，可以导出。" : "预览完成，请先处理 Asset/AssemblyPackage 红色提示。";
+                _status.Text = _analysis.CanExport ? "预览完成，可以导出。" : "预览完成，请先处理 Asset/assembly_package 红色提示。";
                 _status.ForeColor = _analysis.CanExport ? Color.DarkGreen : Color.DarkRed;
                 var upgradeAssets = _coordinator.OpenAssetsRequiringVersionUpgrade(_analysis);
                 var notices = new List<string>();
@@ -278,7 +278,7 @@ namespace SolidWorksAssetExporter.AddIn
                     upload.RemoteRegistryPath, upload.UploadLogPath);
                 var localBackupText = completion.LocalPackageBackups.Count == 0 ? "无" :
                     completion.LocalPackageBackups.Count + " 个（保存在 Asset 根目录的 .local-package-backups 中）";
-                MessageBox.Show(this, string.Format("导出完成。\r\nAssemblyPackage: {0}\r\n新建 Asset: {1}\r\n复用 Asset: {2}\r\nAssemblyPackage 复用: {3}\r\n本地冲突包备份: {4}\r\n远端上传: {5}",
+                MessageBox.Show(this, string.Format("导出完成。\r\nassembly_package: {0}\r\n新建 Asset: {1}\r\n复用 Asset: {2}\r\nassembly_package 复用: {3}\r\n本地冲突包备份: {4}\r\n远端上传: {5}",
                     settings.ExportProject ? completion.ProjectDirectory : "未选择导出",
                     completion.CreatedAssets, completion.ReusedAssets,
                     settings.ExportProject ? (completion.ProjectReused ? "是" : "否") : "不适用", localBackupText, uploadText),

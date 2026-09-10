@@ -204,15 +204,15 @@ namespace SolidWorksAssetExporter.AddIn
         {
             if (node == null) throw new ArgumentNullException("node");
             if (hashFile == null) throw new ArgumentNullException("hashFile");
-            // AssemblyPackage geometry units never use Pack and Go. ExportNodeKind.Project
+            // assembly_package geometry units never use Pack and Go. ExportNodeKind.Mesh
             // remains the compatible XML/wire name for a terminal non-Asset unit whose fingerprint is based directly on its own saved source
             // document, whether that document is a part or an assembly. Pack and Go remains
             // reserved exclusively for assembly Assets in PackAsset below.
             var path = Path.GetFullPath(node.SourcePath);
-            if (!File.Exists(path)) throw new ValidationException("AssemblyPackage 几何源模型文件不存在：" + path);
+            if (!File.Exists(path)) throw new ValidationException("assembly_package 几何源模型文件不存在：" + path);
             var open = _app == null ? null : _app.GetOpenDocumentByName(path) as ModelDoc2;
             if (open != null && _mutationTracker.IsDirty(open, false, path))
-                throw new ValidationException("AssemblyPackage 几何源模型存在未保存修改：" + path);
+                throw new ValidationException("assembly_package 几何源模型存在未保存修改：" + path);
             var entry = Canonical.Join(Path.GetFileName(path),
                 new FileInfo(path).Length.ToString(CultureInfo.InvariantCulture), hashFile(path));
             return FileHash.Sha256Text(Canonical.Join(

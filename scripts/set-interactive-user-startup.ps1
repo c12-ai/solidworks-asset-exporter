@@ -24,7 +24,7 @@ else {
     $sid = (New-Object System.Security.Principal.SecurityIdentifier($UserSid)).Value
     $interactiveUser = $sid
 }
-$subKey = "Software\SolidWorks\AddInsStartup\$addInId"
+$subKey = 'Software\SolidWorks\AddInsStartup'
 $users = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
     [Microsoft.Win32.RegistryHive]::Users,
     [Microsoft.Win32.RegistryView]::Registry64)
@@ -35,28 +35,32 @@ try {
     if ($null -eq $userHive) {
         throw "The registry hive for user $sid is not loaded."
     }
-    if ($Mode -eq 'Enable') {
-        $key = $userHive.CreateSubKey(
-            $subKey,
-            [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree)
-        if ($null -eq $key) {
-            throw "Cannot create HKEY_USERS\$sid\$subKey."
-        }
-        try {
-            $key.SetValue('', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
-            $saved = $key.GetValue('', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $key = $userHive.CreateSubKey(
+        $subKey,
+        [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree)
+    if ($null -eq $key) {
+        throw "Cannot create HKEY_USERS\$sid\$subKey."
+    }
+    try {
+        if ($Mode -eq 'Enable') {
+            $key.SetValue($addInId, 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+            $saved = $key.GetValue($addInId, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
             if ($saved -ne 1) {
                 throw "The SOLIDWORKS add-in startup value could not be verified."
             }
         }
-        finally {
-            $key.Dispose()
+        else {
+            $key.DeleteValue($addInId, $false)
         }
+    }
+    finally {
+        $key.Dispose()
+    }
+    if ($Mode -eq 'Enable') {
         Write-Host "Enabled the add-in for $interactiveUser ($sid)."
         exit 0
     }
 
-    $userHive.DeleteSubKeyTree($subKey, $false)
     Write-Host "Removed the add-in startup entry for $interactiveUser ($sid)."
 }
 finally {

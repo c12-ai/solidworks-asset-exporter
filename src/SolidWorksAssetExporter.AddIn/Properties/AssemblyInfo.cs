@@ -1,8 +1,8 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyTitle("SOLIDWORKS Asset/AssemblyPackage Exporter")]
-[assembly: AssemblyDescription("Exports SOLIDWORKS Assets and AssemblyPackage bundles")]
+[assembly: AssemblyTitle("SOLIDWORKS Asset/assembly_package Exporter")]
+[assembly: AssemblyDescription("Exports SOLIDWORKS Assets and assembly_package bundles")]
 [assembly: AssemblyProduct("SOLIDWORKS Asset Exporter")]
 [assembly: ComVisible(true)]
 [assembly: Guid("0bf40bba-936d-49b1-9636-11ee78e2c260")]
