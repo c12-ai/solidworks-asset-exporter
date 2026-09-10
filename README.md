@@ -11,7 +11,7 @@
 
 拆分只在 Asset 处停止。非 Asset 装配体无论后代是否包含 Asset 都会继续向下；最终非 Asset 叶节点作为装配包几何单元进入当前 assembly_package 目录，不污染全局 Asset 库。
 
-当前开发版本为 `v1.0.7`。
+当前正式版本为 `v1.0.5`。
 
 ## 当前实现范围
 
@@ -116,7 +116,7 @@ asset_version = 1          # 必填正整数
 - 接口名称采用精确匹配并描述真实机械兼容性。螺栓法兰使用明确的孔数、螺纹和分度圆信息，例如 `法兰-4xM6-PCD30`；容纳类接口使用对象类型和决定兼容性的几何特征，例如 `试管-D20`，不单独使用容量名称。快换盘上下盘之间使用独立的快换配对接口名称。
 - `is_adjustable=true` 只表示安装位姿可调，不表示 Asset 的所有机械或工艺参数均可调。
 
-安装角色由 `class` 和上述 `is_` 属性自动推导，不额外填写 role。业务规范要求连接同时满足“父级 `accepts_interfaces` 包含子级 `connection_interface`”和角色矩阵。允许的机械链路为 Robot→Tool、Robot→快换盘-上、快换盘-上→快换盘-下、快换盘-下→Tool、快换架→快换盘-下；禁止 Robot→快换盘-下、快换盘-上→Tool 和快换盘-下→快换盘-上。当前 `v1.0.6` 自动校验单个 Asset 的角色字段和必填接口，尚未根据 assembly_package 中的实际父子边完整执行上述矩阵；导出前应按专项说明复核连接链。未使用的工具端快换组件应停放在快换架上。
+安装角色由 `class` 和上述 `is_` 属性自动推导，不额外填写 role。业务规范要求连接同时满足“父级 `accepts_interfaces` 包含子级 `connection_interface`”和角色矩阵。允许的机械链路为 Robot→Tool、Robot→快换盘-上、快换盘-上→快换盘-下、快换盘-下→Tool、快换架→快换盘-下；禁止 Robot→快换盘-下、快换盘-上→Tool 和快换盘-下→快换盘-上。当前 `v1.0.5` 自动校验单个 Asset 的角色字段和必填接口，尚未根据 assembly_package 中的实际父子边完整执行上述矩阵；导出前应按专项说明复核连接链。未使用的工具端快换组件应停放在快换架上。
 
 填写示例：
 
@@ -151,7 +151,7 @@ Asset 的 `content_fingerprint` 分两层计算：先对 Asset 根模型及其�
 - `templates/custom-properties/draw.drwprp`：工程图。
 - `templates/custom-properties/properties.txt`：SOLIDWORKS 属性名称候选清单。
 
-`scripts/custom-properties.schema.csv` 是属性预览/同步脚本及 VBA 宏使用的保留字段清单。正式应用时会删除文件级中未列入 CSV 的属性；v1.0.6 已包含二维码、快换角色和新接口字段，并已移除 `accepts_robots`。正式应用前仍须先检查预览的删除/新增清单。
+`scripts/custom-properties.schema.csv` 是属性预览/同步脚本及 VBA 宏使用的保留字段清单。正式应用时会删除文件级中未列入 CSV 的属性；v1.0.5 已包含二维码、快换角色和新接口字段，并已移除 `accepts_robots`。正式应用前仍须先检查预览的删除/新增清单。
 
 先运行只读预览并检查删除/新增清单，再决定是否应用：
 
@@ -247,7 +247,7 @@ Asset、装配包几何节点都是叶节点；Group 没有 mesh。装配包几�
 powershell -ExecutionPolicy Bypass -File .\scripts\build-core.ps1 -Configuration Release
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-addin-contract.ps1 -Configuration Release
 powershell -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuration Release
-powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Version v1.0.7
+powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Version v1.0.5
 ```
 
 `verify-addin-contract.ps1` 使用 `InteropStubs.cs`，只验证没有 SOLIDWORKS 的代码契约；输出固定隔离到 `bin\Contract-<Configuration>`，不得作为安装 DLL。`build-addin.ps1` 才会生成可由 SOLIDWORKS 加载的正式 `bin\Release`。打包脚本会检查 Add-in 必须引用真实的 `SolidWorks.Interop.sldworks`、`SolidWorks.Interop.swconst` 和 `SolidWorks.Interop.swpublished`，并拒绝任何在 DLL 内嵌入测试桩接口的构建。
@@ -260,21 +260,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Vers
 
 ## 安装与卸载
 
-### v1.0.7 升版说明
+### v1.0.5 升版说明
 
 - SOLIDWORKS 本地整机导出统一命名为 `assembly_package`（装配包），工具菜单、导出窗口、分类预览、错误提示和本地报告说明同步更新。
 - Wanxiang 顶层目录由 `projects/` 改为 `assembly_package/`，上传目标同步改为 `PUT /archive/assembly_package/...`；已有 `settings.json` 兼容配置键保持不变。
 - XML 文件名前缀保留 `assembly_`，根属性使用 `mesh_format`，普通几何节点使用复数 `kind="meshes"`。由于装配包 XML 契约已变化，已有相同 UUID 的旧内容需要提升 `assembly_version` 后重新导出。
-
-### v1.0.6 升版说明
 
 - 新增快换盘、快换架及统一安装接口属性；不新增 class，角色由 `class`、`is_tool`、`is_fixture`、`is_quick_changer`、`quick_changer_side`、`is_quick_changer_rack` 推导。
 - 分类预览一次性校验快换侧别、布尔格式及各角色必填接口；仍只读取文件级“自定义”属性。
 - 发布包新增 `custom-properties/` 与 `Install-CustomPropertyTemplates.ps1`，可备份并安装 SOLIDWORKS 属性模板。
 - 删除已废弃的 `accepts_robots`；机器人与 Tool 的机械兼容关系只通过标准接口匹配。
 - 发布包新增旧接口迁移宏：`accepts_interface` → `accepts_interfaces`、`placement_interface` → `connection_interface`。
-
-### v1.0.5 升版说明
 
 - 同步 Wanxiang 0.4.x：Asset 使用单次 ZIP 原子发布；assembly_package 使用 `/archive/assembly_package/...` 进行目录 ZIP 上传，发布冲突不会留下半成品或覆盖远端数据。
 - Asset UUID 升级为 v2 规则，仅由 SOLIDWORKS 内部创建时间和完整文件名生成；新增持久 SHA-256 缓存和基于远端注册表的版本判断。
@@ -290,18 +286,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Vers
 - 安装脚本会为当前桌面用户自动启用 Add-in，并随安装包附带对应启动项脚本。
 - 发布流程隔离契约测试桩与正式 Release，并在打包时强制校验真实 SOLIDWORKS Interop，防止生成“DLL 能进入进程但不能建立 `ISwAddin` 回调”的无效安装包。
 
-从 GitHub Releases 下载 `SolidWorksAssetExporter-v1.0.7.zip` 并完整解压。关闭 SOLIDWORKS，右键解压目录中的 `Install.cmd`，选择“以管理员身份运行”。如果从源码目录安装，则运行：
+从 GitHub Releases 下载 `SolidWorksAssetExporter-v1.0.5.zip` 并完整解压。关闭 SOLIDWORKS，右键解压目录中的 `Install.cmd`，选择“以管理员身份运行”。如果从源码目录安装，则运行：
 
 ```text
 .\scripts\install.cmd
 ```
 
-安装脚本会把启动项写入当前桌面用户（即使安装时使用了另一管理员账户）。重新启动 SOLIDWORKS 后，执行 `Asset / assembly_package 导出` 命令。首次使用先设置 Asset 与 assembly_package 本地输出根目录、XML mesh 格式、Wanxiang 地址和 API key，然后点击“分类预览”。Wanxiang 远端实体名称仍为 Project，目录固定为 `assets` 和 `projects`。
+安装脚本会把启动项写入当前桌面用户（即使安装时使用了另一管理员账户）。重新启动 SOLIDWORKS 后，执行 `Asset / assembly_package 导出` 命令。首次使用先设置 Asset 与 assembly_package 本地输出根目录、XML mesh 格式、Wanxiang 地址和 API key，然后点击“分类预览”。Wanxiang 中 Asset 通过 `/asset/{uuid}/v{version}` 原子发布，装配包目录固定为 `assembly_package/`。
 
-### v1.0.7 升级步骤
+### v1.0.5 升级步骤
 
 1. 等待当前预览或导出结束，然后完全关闭 SOLIDWORKS。
-2. 解压 `SolidWorksAssetExporter-v1.0.7.zip`，不要直接在 ZIP 内运行脚本。
+2. 解压 `SolidWorksAssetExporter-v1.0.5.zip`，不要直接在 ZIP 内运行脚本。
 3. 右键 `Install.cmd`，选择“以管理员身份运行”。脚本会覆盖插件 DLL、重新注册 64 位 COM 并为当前桌面用户启用 Add-in。
 4. 启动 SOLIDWORKS，打开已保存的总装配体，先点击“分类预览”，确认 Asset 版本判断后再点击“导出”。
 5. 导出时观察窗口底部当前阶段。如需停止，点击“取消导出”；取消会在当前单个 SOLIDWORKS SaveAs/Pack and Go 操作返回后生效。
