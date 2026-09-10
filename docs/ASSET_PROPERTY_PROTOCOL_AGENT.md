@@ -58,7 +58,7 @@ Agent 生成新数据时必须使用 `1` 或 `0`。
 | `设计原理` | string | 文本或空 | Asset 实现功能所采用的机械、电气或控制原理。 | `气缸驱动平行夹持` |
 | `设计目的` | string | 非空文本 | Asset 要解决的问题、目标和预期用途。Robot 使用该值作为 `robot_id` 名称段。 | `Hebe` |
 | `升版说明` | string | 文本或空 | 当前版本相对上一版本的修改内容和原因。 | `调整夹指行程` |
-| `assembly_version` | integer | 大于 `0` | Project 根装配版本，不是 Asset 内容版本。 | `1` |
+| `assembly_version` | integer | 大于 `0` | SOLIDWORKS AssemblyPackage version; not an Asset content version. | `1` |
 
 ## 3. `class` 语义
 
@@ -414,4 +414,4 @@ Do not create an interface edge between `AdapterBase` and `RackAdapter` when tha
 - 首个版本为 `1`，后续内容变更依次增加。
 - `asset_version` 不用于生成 Asset UUID。
 - Robot 的引用格式固定为 `设计目的:asset_version`，例如 `Hebe:1`。
-- `assembly_version` 只描述 Project 根装配版本，不替代任何 Asset 的 `asset_version`。
+- `assembly_version` 只描述 SOLIDWORKS AssemblyPackage（装配包）版本，不替代任何 Asset 的 `asset_version`。该装配包上传到 Wanxiang 后仍映射为 Project。

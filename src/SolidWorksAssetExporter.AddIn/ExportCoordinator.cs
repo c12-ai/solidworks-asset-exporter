@@ -270,7 +270,7 @@ namespace SolidWorksAssetExporter.AddIn
                 else
                 {
                     result.ProjectFingerprint = string.Empty;
-                    result.ProjectVersionMessage = "[未选择导出 Project：不检查 assembly_version，不生成 XML/Project 几何]";
+                    result.ProjectVersionMessage = "[未选择导出 AssemblyPackage：不检查 assembly_version，不生成装配包 XML/几何]";
                 }
                 CaptureSourceSnapshots(result, root, fileHashes);
             }
@@ -489,7 +489,7 @@ namespace SolidWorksAssetExporter.AddIn
                 var group = groups[index];
                 try
                 {
-                    Checkpoint(progress, cancellationRequested, "计算 Project 指纹 " +
+                    Checkpoint(progress, cancellationRequested, "计算 AssemblyPackage 几何单元指纹 " +
                         (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
                         groups.Count.ToString(CultureInfo.InvariantCulture) + "：" + group.First().Name);
                     // Repeated occurrences share one geometry UUID and one exported mesh. Calculate
@@ -501,7 +501,7 @@ namespace SolidWorksAssetExporter.AddIn
                             _packager.ContentFingerprint(source, fileHashes.Sha256))
                         .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                     if (fingerprints.Count != 1) throw new ValidationException(
-                        "同一 Project 单元 UUID 的多个源模型具有不同内容: " + group.Key);
+                        "同一 AssemblyPackage 几何单元 UUID 的多个源模型具有不同内容: " + group.Key);
                     result.ProjectFingerprints.Add(group.Key, fingerprints[0]);
                 }
                 catch (Exception ex)
@@ -509,14 +509,14 @@ namespace SolidWorksAssetExporter.AddIn
                     if (IsFatal(ex)) throw;
                     failed = true;
                     result.CanExport = false;
-                    AddValidationError(result, "Project [" + group.First().Name + "] 检查失败：" + ex.Message);
+                    AddValidationError(result, "AssemblyPackage 几何单元 [" + group.First().Name + "] 检查失败：" + ex.Message);
                 }
             }
 
             if (failed)
             {
                 result.ProjectFingerprint = string.Empty;
-                result.ProjectVersionMessage = "[Project 指纹检查存在错误，不能判断 assembly_version]";
+                result.ProjectVersionMessage = "[AssemblyPackage 指纹检查存在错误，不能判断 assembly_version]";
                 return result;
             }
             result.ProjectFingerprint = CalculateProjectFingerprint(result.Plan, result.ProjectFingerprints);
@@ -532,17 +532,17 @@ namespace SolidWorksAssetExporter.AddIn
                 result.ProjectState = ProjectReportValidator.Inspect(destination, plan.AssemblyUuid,
                     plan.AssemblyVersion, result.ProjectFingerprint);
                 result.ProjectVersionMessage = result.ProjectState == ExistingProjectState.Reusable
-                    ? "[Project 指纹一致：assembly_version v" +
+                    ? "[AssemblyPackage 指纹一致：assembly_version v" +
                         plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + " 可直接复用]"
-                    : "[新 Project：分类预览已完成指纹检查；导出时创建 assembly_version v" +
+                    : "[新 AssemblyPackage：分类预览已完成指纹检查；导出时创建 assembly_version v" +
                         plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + "]";
             }
             catch (ValidationException ex)
             {
                 result.CanExport = false;
                 result.ProjectVersionError = ex.Message;
-                result.ProjectVersionMessage = "[Project 版本校验失败：" + ex.Message + "]";
-                AddValidationError(result, "Project 版本校验失败：" + ex.Message);
+                result.ProjectVersionMessage = "[AssemblyPackage 版本校验失败：" + ex.Message + "]";
+                AddValidationError(result, "AssemblyPackage 版本校验失败：" + ex.Message);
             }
         }
 
@@ -555,10 +555,10 @@ namespace SolidWorksAssetExporter.AddIn
             Action<string> progress, Func<bool> cancellationRequested)
         {
             if (previewed == null) throw new ArgumentNullException("previewed");
-            if (!previewed.CanExport) throw new ValidationException("预览发现 Asset/Project 版本需要调整，不能继续导出。");
+            if (!previewed.CanExport) throw new ValidationException("预览发现 Asset/AssemblyPackage 版本需要调整，不能继续导出。");
             settings.Validate();
             if (settings.ExportProject != previewed.Plan.ExportProject)
-                throw new ValidationException("导出 Project 选项在预览后发生变化，请重新分类预览。");
+                throw new ValidationException("导出 AssemblyPackage 选项在预览后发生变化，请重新分类预览。");
             RevalidatePreview(previewed, settings, progress, cancellationRequested);
 
             var activeDocument = _app.ActiveDoc as ModelDoc2;
@@ -644,7 +644,7 @@ namespace SolidWorksAssetExporter.AddIn
 
             if (settings.ExportProject)
             {
-                Checkpoint(progress, cancellationRequested, "重新校验预览后的 Project 版本状态");
+                Checkpoint(progress, cancellationRequested, "重新校验预览后的 AssemblyPackage 版本状态");
                 ExistingProjectState projectState;
                 try
                 {
@@ -654,10 +654,10 @@ namespace SolidWorksAssetExporter.AddIn
                 }
                 catch (ValidationException ex)
                 {
-                    throw new ValidationException("Project 本地包在分类预览后发生变化，请重新预览：" + ex.Message);
+                    throw new ValidationException("AssemblyPackage 本地包在分类预览后发生变化，请重新预览：" + ex.Message);
                 }
                 if (projectState != previewed.ProjectState)
-                    throw new ValidationException("Project 本地版本状态在分类预览后发生变化，请重新预览。");
+                    throw new ValidationException("AssemblyPackage 本地版本状态在分类预览后发生变化，请重新预览。");
             }
         }
 
@@ -850,7 +850,7 @@ namespace SolidWorksAssetExporter.AddIn
             Action<string> progress, Func<bool> cancellationRequested)
         {
             var plan = analysis.Plan;
-            Checkpoint(progress, cancellationRequested, "检查 Project 导出包");
+            Checkpoint(progress, cancellationRequested, "检查 AssemblyPackage 导出包");
             var destination = Path.Combine(settings.ProjectExportRoot, plan.AssemblyUuid,
                 "v" + plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture));
             completion.ProjectDirectory = destination;
@@ -866,13 +866,13 @@ namespace SolidWorksAssetExporter.AddIn
                 for (var index = 0; index < projects.Count; index++)
                 {
                     var project = projects[index];
-                    Checkpoint(progress, cancellationRequested, "导出 Project STEP/STL " +
+                    Checkpoint(progress, cancellationRequested, "导出 AssemblyPackage 几何 STEP/STL " +
                         (index + 1).ToString(CultureInfo.InvariantCulture) + "/" +
                         projects.Count.ToString(CultureInfo.InvariantCulture) + "：" + project.Name);
                     _geometry.ExportBoth((SwCadNode)project.Source, Path.Combine(transaction.StagingDirectory, "meshes", project.GeometryUuid));
                 }
 
-                Checkpoint(progress, cancellationRequested, "生成 Project XML 和 export-report.json");
+                Checkpoint(progress, cancellationRequested, "生成 AssemblyPackage XML 和 export-report.json");
                 var xmlName = "assembly_" + plan.AssemblyUuid + "_v" + plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + ".xml";
                 AssemblyXmlWriter.Write(Path.Combine(transaction.StagingDirectory, xmlName), plan);
                 var relativeFiles = Directory.EnumerateFiles(transaction.StagingDirectory, "*", SearchOption.AllDirectories)
@@ -934,7 +934,7 @@ namespace SolidWorksAssetExporter.AddIn
                     : string.Empty)
                 .Append(savedLocally ? "已保存本地副本]" : "不保存本地副本]")
                 .AppendLine()
-                .Append("Project 版本: ").AppendLine(string.IsNullOrWhiteSpace(projectVersionMessage)
+                .Append("AssemblyPackage 版本: ").AppendLine(string.IsNullOrWhiteSpace(projectVersionMessage)
                     ? "[未完成版本判断]" : projectVersionMessage)
                 .AppendLine();
             var errors = (validationErrors ?? Enumerable.Empty<string>()).ToList();
@@ -963,7 +963,8 @@ namespace SolidWorksAssetExporter.AddIn
         private static void AppendPreview(StringBuilder builder, ExportNode node, string indent, bool last,
             IDictionary<string, string> assetVersionMessages, ISet<string> seenAssets, bool exportProject)
         {
-            builder.Append(indent).Append(last ? "└─ " : "├─ ").Append(node.Kind.ToString().PadRight(8)).Append(' ').Append(node.Name);
+            var kindLabel = node.Kind == ExportNodeKind.Project ? "Geometry" : node.Kind.ToString();
+            builder.Append(indent).Append(last ? "└─ " : "├─ ").Append(kindLabel.PadRight(15)).Append(' ').Append(node.Name);
             if (node.Kind == ExportNodeKind.Asset)
             {
                 if (seenAssets.Add(node.AssetId))
@@ -975,11 +976,11 @@ namespace SolidWorksAssetExporter.AddIn
                 else builder.Append("  [同一 Asset 的另一实例]");
             }
             if (node.Kind == ExportNodeKind.Project)
-                builder.Append(exportProject ? "  [导出 STEP/STL]" : "  [未选择导出 Project]");
+                builder.Append(exportProject ? "  [导出装配包 STEP/STL]" : "  [未选择导出 AssemblyPackage]");
             if (node.Kind == ExportNodeKind.Robot)
                 builder.Append(exportProject
-                    ? "  [跳过 Asset/几何；Project XML: robot_id=" + node.RobotId + "]"
-                    : "  [跳过 Asset；未选择导出 Project]");
+                    ? "  [跳过 Asset/几何；AssemblyPackage XML: robot_id=" + node.RobotId + "]"
+                    : "  [跳过 Asset；未选择导出 AssemblyPackage]");
             builder.AppendLine();
             var children = node.Children.ToList();
             for (var i = 0; i < children.Count; i++)

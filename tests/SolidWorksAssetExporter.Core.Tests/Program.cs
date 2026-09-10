@@ -26,7 +26,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset boundary never reads children", AssetBoundaryNeverReadsChildren);
             Run("Asset subassembly stays opaque", AssetSubassemblyStaysOpaque);
             Run("Asset parent skips child property validation", AssetParentSkipsChildPropertyValidation);
-            Run("Project classification ignores nonsemantic duplicate properties", ProjectClassificationIgnoresNonsemanticDuplicateProperties);
+            Run("AssemblyPackage geometry classification ignores nonsemantic duplicate properties", ProjectClassificationIgnoresNonsemanticDuplicateProperties);
             Run("Non-Asset subassembly continues to leaves", NonAssetSubassemblyContinuesToLeaves);
             Run("Only Asset-containing branch descends", NestedAssetOnlyDescendsRequiredBranch);
             Run("Non-Asset subassembly with two Assets becomes Group", NonAssetSubassemblyWithTwoAssetsBecomesGroup);
@@ -45,11 +45,11 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset identity uses creation time and file name only", AssetIdentityUsesCreationTimeAndFileName);
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
             Run("XML has leaf mesh references", XmlLeafReferences);
-            Run("Robot is a Project XML reference and never an Asset", RobotIsProjectReference);
-            Run("Project export can be disabled", ProjectExportCanBeDisabled);
+            Run("Robot is an AssemblyPackage XML reference and never an Asset", RobotIsProjectReference);
+            Run("AssemblyPackage export can be disabled", ProjectExportCanBeDisabled);
             Run("Manifest validates hashes and conflicts", ManifestValidation);
             Run("Robot Asset is metadata only", RobotAssetIsMetadataOnly);
-            Run("Project report validates immutable package", ProjectReportValidation);
+            Run("AssemblyPackage report validates immutable package", ProjectReportValidation);
             Run("Directory transaction is immutable", DirectoryTransactionIsImmutable);
             Run("Part Asset source stays single-file", PartAssetSourceStaysSingleFile);
             Run("Part Asset packaging avoids SOLIDWORKS Pack and Go", PartAssetPackagingAvoidsPackAndGo);
@@ -82,8 +82,8 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset drawings are copied beside source models without PDF", DrawingSourcesAreCopiedWithoutPdf);
             Run("Asset file fingerprint cache reuses unchanged hashes", FileFingerprintCacheReusesUnchangedHashes);
             Run("Export preview snapshot rejects changed source files", ExportPreviewSnapshotRejectsChangedFiles);
-            Run("Project part fingerprint avoids SOLIDWORKS Pack and Go", ProjectPartFingerprintAvoidsPackAndGo);
-            Run("Project assembly fingerprint avoids SOLIDWORKS Pack and Go", ProjectAssemblyFingerprintAvoidsPackAndGo);
+            Run("AssemblyPackage part fingerprint avoids SOLIDWORKS Pack and Go", ProjectPartFingerprintAvoidsPackAndGo);
+            Run("AssemblyPackage assembly fingerprint avoids SOLIDWORKS Pack and Go", ProjectAssemblyFingerprintAvoidsPackAndGo);
             Run("SOLIDWORKS component state keeps lightweight nodes", SolidWorksComponentStateKeepsLightweightNodes);
             Run("SOLIDWORKS classification reads file-level Asset flag from hidden model", SolidWorksClassificationReadsFileLevelAssetFlag);
             Run("SOLIDWORKS classification opens each repeated source once", SolidWorksClassificationOpensRepeatedSourceOnce);
@@ -1687,8 +1687,8 @@ namespace SolidWorksAssetExporter.Core.Tests
                 Equal(0, result.AssetVersionsAlreadyRegistered);
                 Equal("/asset/registry", result.RemoteRegistryPath);
                 True(progress.Any(value => value.Contains("Asset 1/1") && value.Contains("HTTP 201")));
-                True(progress.Any(value => value.Contains("正在打包 Project")));
-                True(progress.Any(value => value.Contains("Project 已收到 HTTP 200")));
+                True(progress.Any(value => value.Contains("正在打包 Wanxiang Project")));
+                True(progress.Any(value => value.Contains("Wanxiang Project 已收到 HTTP 200")));
                 True(progress.Any(value => value.Contains("全部服务器响应均已收到")));
             }
             finally

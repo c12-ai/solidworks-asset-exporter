@@ -91,11 +91,11 @@ namespace SolidWorksAssetExporter.AddIn
         {
             _commands = _application.GetCommandManager(_cookie);
             int errors = 0;
-            var group = _commands.CreateCommandGroup2(CommandGroupId, "Asset / Project 导出", "导出 Asset 库和 Project 装配 XML",
-                "Asset / Project 导出", -1, true, ref errors);
+            var group = _commands.CreateCommandGroup2(CommandGroupId, "Asset / AssemblyPackage 导出", "导出 Asset 库和 AssemblyPackage 装配包",
+                "Asset / AssemblyPackage 导出", -1, true, ref errors);
             if (group == null || errors != (int)swCreateCommandGroupErrors.swCreateCommandGroup_Success)
                 throw new InvalidOperationException("无法创建 SOLIDWORKS 命令组，错误码: " + errors);
-            group.AddCommandItem2("Asset / Project 导出", -1, "分类预览并导出", "Asset / Project 导出", -1,
+            group.AddCommandItem2("Asset / AssemblyPackage 导出", -1, "分类预览并导出", "Asset / AssemblyPackage 导出", -1,
                 "OnExport", "CanExport", 0, (int)swCommandItemType_e.swMenuItem);
             group.HasMenu = true; group.HasToolbar = false; group.Activate();
         }
@@ -120,8 +120,8 @@ namespace SolidWorksAssetExporter.AddIn
             using (var key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\SolidWorks\Addins\" + id))
             {
                 key.SetValue(null, 1, RegistryValueKind.DWord);
-                key.SetValue("Title", "Asset / Project 混合导出");
-                key.SetValue("Description", "在 Asset 边界停止，非 Asset 装配递归拆到 Project 叶节点");
+                key.SetValue("Title", "Asset / AssemblyPackage 混合导出");
+                key.SetValue("Description", "导出 Asset 库和 SOLIDWORKS AssemblyPackage（装配包）");
             }
             using (var key = Registry.CurrentUser.CreateSubKey(@"Software\SolidWorks\AddInsStartup\" + id))
                 key.SetValue(null, 1, RegistryValueKind.DWord);

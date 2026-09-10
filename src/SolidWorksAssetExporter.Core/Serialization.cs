@@ -209,30 +209,30 @@ namespace SolidWorksAssetExporter.Core
         {
             var reportPath = Path.Combine(projectVersionDirectory, "export-report.json");
             if (!Directory.Exists(projectVersionDirectory) && !File.Exists(reportPath)) return ExistingProjectState.Missing;
-            if (!File.Exists(reportPath)) throw new ValidationException("Project 版本目录存在但缺少 export-report.json。");
+            if (!File.Exists(reportPath)) throw new ValidationException("AssemblyPackage 版本目录存在但缺少 export-report.json。");
             ExportReport report;
             try { report = JsonFile.Read<ExportReport>(reportPath); }
-            catch (Exception ex) { throw new ValidationException("Project export report 无法读取: " + ex.Message); }
+            catch (Exception ex) { throw new ValidationException("AssemblyPackage export report 无法读取: " + ex.Message); }
             if (!string.Equals(report.AssemblyUuid, expectedAssemblyUuid, StringComparison.OrdinalIgnoreCase) || report.AssemblyVersion != expectedVersion)
-                throw new ValidationException("Project export report 的 UUID/版本与目录不一致。");
+                throw new ValidationException("AssemblyPackage export report 的 UUID/版本与目录不一致。");
             if (!string.Equals(report.ContentFingerprint, currentContentFingerprint, StringComparison.OrdinalIgnoreCase))
-                throw new ValidationException("Project 版本已存在但当前内容不同；请提升 assembly_version。");
+                throw new ValidationException("AssemblyPackage 版本已存在但当前内容不同；请提升 assembly_version。");
             var projectPaths = new HashSet<string>((report.Files ?? new List<ManifestFile>()).Select(value => (value.Path ?? string.Empty).Replace('\\', '/')),
                 StringComparer.OrdinalIgnoreCase);
             if (projectPaths.Count != (report.Files ?? new List<ManifestFile>()).Count ||
                 projectPaths.Count(value => value.StartsWith("assembly_", StringComparison.OrdinalIgnoreCase) && value.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) != 1)
-                throw new ValidationException("Project report 必须声明一个 assembly XML，且文件路径不能重复。");
+                throw new ValidationException("AssemblyPackage report 必须声明一个 assembly XML，且文件路径不能重复。");
             foreach (var path in projectPaths.Where(value => value.StartsWith("meshes/", StringComparison.OrdinalIgnoreCase) && value.EndsWith("/model.step", StringComparison.OrdinalIgnoreCase)))
-                if (!projectPaths.Contains(path.Substring(0, path.Length - 4) + "stl")) throw new ValidationException("Project 单元缺少 STL: " + path);
+                if (!projectPaths.Contains(path.Substring(0, path.Length - 4) + "stl")) throw new ValidationException("AssemblyPackage 几何单元缺少 STL: " + path);
             foreach (var path in projectPaths.Where(value => value.StartsWith("meshes/", StringComparison.OrdinalIgnoreCase) && value.EndsWith("/model.stl", StringComparison.OrdinalIgnoreCase)))
-                if (!projectPaths.Contains(path.Substring(0, path.Length - 3) + "step")) throw new ValidationException("Project 单元缺少 STEP: " + path);
+                if (!projectPaths.Contains(path.Substring(0, path.Length - 3) + "step")) throw new ValidationException("AssemblyPackage 几何单元缺少 STEP: " + path);
             foreach (var file in report.Files ?? new List<ManifestFile>())
             {
                 var fullPath = PathPolicy.CombineUnderRoot(projectVersionDirectory, file.Path);
-                if (!File.Exists(fullPath)) throw new ValidationException("Project report 声明的文件不存在: [" + file.Path + "]。");
+                if (!File.Exists(fullPath)) throw new ValidationException("AssemblyPackage report 声明的文件不存在: [" + file.Path + "]。");
                 var info = new FileInfo(fullPath);
                 if (info.Length != file.Size || !string.Equals(FileHash.Sha256(fullPath), file.Sha256, StringComparison.OrdinalIgnoreCase))
-                    throw new ValidationException("Project 文件哈希或大小校验失败: [" + file.Path + "]。");
+                    throw new ValidationException("AssemblyPackage 文件哈希或大小校验失败: [" + file.Path + "]。");
             }
             return ExistingProjectState.Reusable;
         }

@@ -124,13 +124,13 @@ QR_size    = 20mm
 QR_spacing = 10
 ```
 
-## 5. Project 版本属性
+## 5. AssemblyPackage 版本属性
 
 | 属性 | 值 | 含义 | 示例 |
 | --- | --- | --- | --- |
-| `assembly_version` | 从 `1` 开始的正整数 | Project 根装配体的版本。它不是 Asset 版本。 | `1` |
+| `assembly_version` | 从 `1` 开始的正整数 | SOLIDWORKS AssemblyPackage（装配包）的版本。它不是 Asset 版本。 | `1` |
 
-一个 Project 可以包含多个不同 `asset_version` 的 Asset；`assembly_version` 不替代任何 Asset 自己的版本。
+一个 AssemblyPackage 可以包含多个不同 `asset_version` 的 Asset；`assembly_version` 不替代任何 Asset 自己的版本。装配包上传到 Wanxiang 后仍称为 Project。
 
 ## 6. 典型资产定义
 
