@@ -128,7 +128,7 @@ namespace SolidWorksAssetExporter.Core
             }
             if (scan.Children.Count == 0)
             {
-                node.Kind = ExportNodeKind.Mesh;
+                node.Kind = ExportNodeKind.Meshes;
                 if (exportProject)
                 {
                     var projectModel = PlanningModel(scan.Source);
@@ -142,7 +142,7 @@ namespace SolidWorksAssetExporter.Core
             }
 
             // Every non-Asset assembly with included children remains a Group and keeps descending.
-            // Only an Asset is an opaque boundary. Mesh is the XML/wire kind for
+            // Only an Asset is an opaque boundary. Meshes is the XML/wire kind for
             // assembly_package geometry leaves.
             node.Kind = ExportNodeKind.Group;
             foreach (var child in scan.Children.OrderBy(child => child.Source.InstancePath ?? string.Empty, StringComparer.OrdinalIgnoreCase))
@@ -182,9 +182,9 @@ namespace SolidWorksAssetExporter.Core
                 if (node.Children.Count != 0) throw new ValidationException(node.Kind + " 节点必须是叶节点。");
                 if (node.Kind == ExportNodeKind.Asset && string.IsNullOrWhiteSpace(node.AssetId))
                     throw new ValidationException("Asset 节点缺少 asset_id。");
-                if (node.Kind == ExportNodeKind.Mesh && exportProject && string.IsNullOrWhiteSpace(node.MeshFile))
+                if (node.Kind == ExportNodeKind.Meshes && exportProject && string.IsNullOrWhiteSpace(node.MeshFile))
                     throw new ValidationException("assembly_package 几何节点缺少 mesh 文件。");
-                if (node.Kind == ExportNodeKind.Mesh && !exportProject && !string.IsNullOrWhiteSpace(node.MeshFile))
+                if (node.Kind == ExportNodeKind.Meshes && !exportProject && !string.IsNullOrWhiteSpace(node.MeshFile))
                     throw new ValidationException("未选择导出 assembly_package 时，装配包几何节点不能包含 mesh 文件。");
                 if (node.Kind == ExportNodeKind.Robot && string.IsNullOrWhiteSpace(node.RobotId))
                     throw new ValidationException("Robot 节点缺少 robot_id。");

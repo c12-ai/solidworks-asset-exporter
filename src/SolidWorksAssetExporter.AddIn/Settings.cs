@@ -42,7 +42,7 @@ namespace SolidWorksAssetExporter.AddIn
             if (ExportProject)
             {
                 if (string.IsNullOrWhiteSpace(ProjectExportRoot)) throw new ValidationException("选择导出 assembly_package 时必须设置 assembly_package 导出根目录。");
-                ProjectExportRoot = Path.GetFullPath(ProjectExportRoot);
+                ProjectExportRoot = NormalizeAssemblyPackageRoot(ProjectExportRoot);
                 var asset = AssetLibraryRoot.TrimEnd('\\') + "\\";
                 var project = ProjectExportRoot.TrimEnd('\\') + "\\";
                 if (asset.StartsWith(project, StringComparison.OrdinalIgnoreCase) || project.StartsWith(asset, StringComparison.OrdinalIgnoreCase))
@@ -64,12 +64,24 @@ namespace SolidWorksAssetExporter.AddIn
         {
             if (string.IsNullOrWhiteSpace(WanxiangBaseUrl)) WanxiangBaseUrl = DefaultWanxiangBaseUrl;
             if (DrawingSearchDirectories == null) DrawingSearchDirectories = new List<string>();
+            if (!string.IsNullOrWhiteSpace(ProjectExportRoot))
+                ProjectExportRoot = NormalizeAssemblyPackageRoot(ProjectExportRoot);
+        }
+
+        private static string NormalizeAssemblyPackageRoot(string path)
+        {
+            var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var leaf = Path.GetFileName(fullPath);
+            if (!string.Equals(leaf, "project", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(leaf, "projects", StringComparison.OrdinalIgnoreCase)) return fullPath;
+            var parent = Path.GetDirectoryName(fullPath);
+            return string.IsNullOrWhiteSpace(parent) ? fullPath : Path.Combine(parent, "assembly_package");
         }
     }
 
     public static class WanxiangRemoteLayout
     {
-        public const string Projects = "projects";
+        public const string AssemblyPackage = "assembly_package";
         public const string AssetRegistryEndpoint = "/asset/registry";
     }
 

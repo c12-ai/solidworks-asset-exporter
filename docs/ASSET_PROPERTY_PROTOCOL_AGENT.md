@@ -414,4 +414,4 @@ Do not create an interface edge between `AdapterBase` and `RackAdapter` when tha
 - 首个版本为 `1`，后续内容变更依次增加。
 - `asset_version` 不用于生成 Asset UUID。
 - Robot 的引用格式固定为 `设计目的:asset_version`，例如 `Hebe:1`。
-- `assembly_version` 只描述 SOLIDWORKS assembly_package（装配包）版本，不替代任何 Asset 的 `asset_version`。该装配包上传到 Wanxiang 后仍映射为 Project。
+- `assembly_version` 只描述 SOLIDWORKS assembly_package（装配包）版本，不替代任何 Asset 的 `asset_version`。本地与 Wanxiang 远端均使用 `assembly_package/` 顶层目录。

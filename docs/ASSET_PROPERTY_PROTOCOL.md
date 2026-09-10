@@ -130,7 +130,7 @@ QR_spacing = 10
 | --- | --- | --- | --- |
 | `assembly_version` | 从 `1` 开始的正整数 | SOLIDWORKS assembly_package（装配包）的版本。它不是 Asset 版本。 | `1` |
 
-一个 assembly_package 可以包含多个不同 `asset_version` 的 Asset；`assembly_version` 不替代任何 Asset 自己的版本。装配包上传到 Wanxiang 后仍称为 Project。
+一个 assembly_package 可以包含多个不同 `asset_version` 的 Asset；`assembly_version` 不替代任何 Asset 自己的版本。本地与 Wanxiang 远端均使用 `assembly_package/` 顶层目录。
 
 ## 6. 典型资产定义
 

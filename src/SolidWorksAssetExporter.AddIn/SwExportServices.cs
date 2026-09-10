@@ -204,7 +204,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             if (node == null) throw new ArgumentNullException("node");
             if (hashFile == null) throw new ArgumentNullException("hashFile");
-            // assembly_package geometry units never use Pack and Go. ExportNodeKind.Mesh
+            // assembly_package geometry units never use Pack and Go. ExportNodeKind.Meshes
             // remains the compatible XML/wire name for a terminal non-Asset unit whose fingerprint is based directly on its own saved source
             // document, whether that document is a part or an assembly. Pack and Go remains
             // reserved exclusively for assembly Assets in PackAsset below.
