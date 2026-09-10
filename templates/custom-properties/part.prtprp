@@ -70,7 +70,7 @@
         <Data>
           <Item Label="movable" PropValue="movable" />
           <Item Label="robot" PropValue="robot" />
-          <Item Label="equipment" PropValue="equipment" />
+          <Item Label="station" PropValue="station" />
           <Item Label="structure" PropValue="structure" />
         </Data>
       </Control>

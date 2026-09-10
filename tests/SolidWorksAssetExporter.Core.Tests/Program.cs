@@ -38,7 +38,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Configuration properties are ignored for classification", ConfigurationPropertiesIgnoredForClassification);
             Run("Configuration properties are ignored for metadata", ConfigurationPropertiesIgnoredForMetadata);
             Run("Required Asset properties report every blank field", RequiredAssetPropertiesReportEveryBlankField);
-            Run("Wanxiang publishable classes use the 0.4.0 spelling", WanxiangPublishableClassContract);
+            Run("Wanxiang publishable classes use the current protocol values", WanxiangPublishableClassContract);
             Run("Quick changer connection properties are validated together", QuickChangerConnectionPropertiesAreValidatedTogether);
             Run("Connection roles are derived from class and is flags", ConnectionRolesAreDerived);
             Run("UUIDv5 matches RFC vector", Uuid5KnownVector);
@@ -680,9 +680,15 @@ namespace SolidWorksAssetExporter.Core.Tests
                 { PropertyRules.AssetClass, "movable" }
             };
             Equal("movable", PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+            properties[PropertyRules.AssetClass] = "station";
+            Equal("station", PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+            properties[PropertyRules.AssetClass] = "structure";
+            Equal("structure", PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
             properties[PropertyRules.AssetClass] = "Movable";
             Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
             properties[PropertyRules.AssetClass] = "moveable";
+            Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
+            properties[PropertyRules.AssetClass] = "equipment";
             Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
             properties[PropertyRules.AssetClass] = "robot";
             Throws<ValidationException>(() => PropertyRules.RequireWanxiangAssetClass(properties, "asset"));
@@ -711,14 +717,14 @@ namespace SolidWorksAssetExporter.Core.Tests
 
             var rack = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                { PropertyRules.AssetClass, "equipment" },
+                { PropertyRules.AssetClass, "station" },
                 { PropertyRules.IsQuickChangerRack, "1" },
                 { PropertyRules.AcceptsInterfaces, "快换盘-A" }
             };
             Equal(0, PropertyRules.ValidateAssetConnectionProperties(rack).Count);
             rack[PropertyRules.AssetClass] = "structure";
             True(PropertyRules.ValidateAssetConnectionProperties(rack)
-                .Any(value => value.Contains("equipment")));
+                .Any(value => value.Contains("station")));
         }
 
         private static void ConnectionRolesAreDerived()
@@ -731,7 +737,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             };
             Equal("快换盘-机器人端", PropertyRules.DescribeAssetConnectionRole(properties));
             properties[PropertyRules.IsQuickChanger] = "0";
-            properties[PropertyRules.AssetClass] = "equipment";
+            properties[PropertyRules.AssetClass] = "station";
             properties[PropertyRules.IsQuickChangerRack] = "1";
             Equal("快换架", PropertyRules.DescribeAssetConnectionRole(properties));
         }
@@ -1137,7 +1143,7 @@ namespace SolidWorksAssetExporter.Core.Tests
                     "robot-fingerprint"));
 
                 File.Delete(manifestPath);
-                manifest.Properties["CLASS"] = "equipment";
+                manifest.Properties["CLASS"] = "station";
                 JsonFile.Write(manifestPath, manifest);
                 Throws<ValidationException>(() => AssetManifestValidator.Inspect(versionDirectory, uuid, 1,
                     "robot-fingerprint"));

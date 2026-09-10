@@ -105,8 +105,8 @@ namespace SolidWorksAssetExporter.Core
                 RequireValue(issues, accepts, AcceptsInterfaces,
                     "快换架必须声明可停放的接口");
                 var assetClass = ReadTrimmed(properties, AssetClass);
-                if (!string.Equals(assetClass, "equipment", StringComparison.Ordinal))
-                    issues.Add("快换架不能由机器人搬运但需要参与快换交互，[class] 必须为 [equipment]。");
+                if (!string.Equals(assetClass, "station", StringComparison.Ordinal))
+                    issues.Add("快换架不能由机器人搬运但需要参与快换交互，[class] 必须为 [station]。");
             }
 
             if (isTool)
@@ -257,14 +257,18 @@ namespace SolidWorksAssetExporter.Core
             string raw;
             var value = properties != null && properties.TryGetValue(AssetClass, out raw)
                 ? raw ?? string.Empty : string.Empty;
-            if (value == "movable" || value == "structure" || value == "equipment") return value;
+            if (value == "movable" || value == "structure" || value == "station") return value;
             if (value == "moveable")
                 throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
                     "Asset 模型 [{0}] 的文件级自定义属性 [class] 使用了旧拼写 [moveable]；" +
                     "Wanxiang 0.4.0 只接受 [movable]。", modelName));
+            if (value == "equipment")
+                throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                    "Asset 模型 [{0}] 的文件级自定义属性 [class] 使用了旧值 [equipment]；" +
+                    "请按资产属性协议改为 [station]。", modelName));
             throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
                 "Asset 模型 [{0}] 必须设置文件级自定义属性 [class]，且值必须精确为 " +
-                "[movable]、[structure] 或 [equipment]（全小写、无首尾空格）。", modelName));
+                "[movable]、[structure] 或 [station]（全小写、无首尾空格）。", modelName));
         }
 
         public static string BuildRobotId(IDictionary<string, string> properties, string modelName)

@@ -86,7 +86,7 @@ ZIP 文件条目必须与 manifest `files` 完全一致，manifest 自身不写�
 - `content_fingerprint` 与请求头一致；
 - `properties.零件名` 为非空字符串；
 - `properties.设计目的` 为非空字符串；
-- `properties.class` 必须精确为 `movable`、`structure`、`equipment` 之一；
+- `properties.class` 必须精确为 `movable`、`structure`、`station` 之一；
 - 旧拼写 `moveable`、大小写变化和首尾空格均不接受；
 - `robot` 不通过本接口发布。
 
