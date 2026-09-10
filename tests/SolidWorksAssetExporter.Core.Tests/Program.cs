@@ -26,7 +26,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset boundary never reads children", AssetBoundaryNeverReadsChildren);
             Run("Asset subassembly stays opaque", AssetSubassemblyStaysOpaque);
             Run("Asset parent skips child property validation", AssetParentSkipsChildPropertyValidation);
-            Run("Project classification ignores nonsemantic duplicate properties", ProjectClassificationIgnoresNonsemanticDuplicateProperties);
+            Run("assembly_package geometry classification ignores nonsemantic duplicate properties", ProjectClassificationIgnoresNonsemanticDuplicateProperties);
             Run("Non-Asset subassembly continues to leaves", NonAssetSubassemblyContinuesToLeaves);
             Run("Only Asset-containing branch descends", NestedAssetOnlyDescendsRequiredBranch);
             Run("Non-Asset subassembly with two Assets becomes Group", NonAssetSubassemblyWithTwoAssetsBecomesGroup);
@@ -45,11 +45,11 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset identity uses creation time and file name only", AssetIdentityUsesCreationTimeAndFileName);
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
             Run("XML has leaf mesh references", XmlLeafReferences);
-            Run("Robot is a Project XML reference and never an Asset", RobotIsProjectReference);
-            Run("Project export can be disabled", ProjectExportCanBeDisabled);
+            Run("Robot is an assembly_package XML reference and never an Asset", RobotIsProjectReference);
+            Run("assembly_package export can be disabled", ProjectExportCanBeDisabled);
             Run("Manifest validates hashes and conflicts", ManifestValidation);
             Run("Robot Asset is metadata only", RobotAssetIsMetadataOnly);
-            Run("Project report validates immutable package", ProjectReportValidation);
+            Run("assembly_package report validates immutable package", ProjectReportValidation);
             Run("Directory transaction is immutable", DirectoryTransactionIsImmutable);
             Run("Part Asset source stays single-file", PartAssetSourceStaysSingleFile);
             Run("Part Asset packaging avoids SOLIDWORKS Pack and Go", PartAssetPackagingAvoidsPackAndGo);
@@ -82,8 +82,8 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset drawings are copied beside source models without PDF", DrawingSourcesAreCopiedWithoutPdf);
             Run("Asset file fingerprint cache reuses unchanged hashes", FileFingerprintCacheReusesUnchangedHashes);
             Run("Export preview snapshot rejects changed source files", ExportPreviewSnapshotRejectsChangedFiles);
-            Run("Project part fingerprint avoids SOLIDWORKS Pack and Go", ProjectPartFingerprintAvoidsPackAndGo);
-            Run("Project assembly fingerprint avoids SOLIDWORKS Pack and Go", ProjectAssemblyFingerprintAvoidsPackAndGo);
+            Run("assembly_package part fingerprint avoids SOLIDWORKS Pack and Go", ProjectPartFingerprintAvoidsPackAndGo);
+            Run("assembly_package assembly fingerprint avoids SOLIDWORKS Pack and Go", ProjectAssemblyFingerprintAvoidsPackAndGo);
             Run("SOLIDWORKS component state keeps lightweight nodes", SolidWorksComponentStateKeepsLightweightNodes);
             Run("SOLIDWORKS classification reads file-level Asset flag from hidden model", SolidWorksClassificationReadsFileLevelAssetFlag);
             Run("SOLIDWORKS classification opens each repeated source once", SolidWorksClassificationOpensRepeatedSourceOnce);
@@ -515,7 +515,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             var plan = new ExportPlanBuilder().Build(scan, ProjectMeshFormat.Step);
 
             Equal(ScanClassification.NoAsset, scan.Classification);
-            Equal(ExportNodeKind.Project, plan.Roots.Single().Kind);
+            Equal(ExportNodeKind.Mesh, plan.Roots.Single().Kind);
             Equal(rootReads, root.ModelReadCalls);
             Equal(childReads, child.ModelReadCalls);
         }
@@ -537,7 +537,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(1, plan.Roots.Count(x => x.Kind == ExportNodeKind.Group));
             var group = plan.Roots.Single(x => x.Name == "custom-frame");
             Equal(2, group.Children.Count);
-            Equal(2, group.Children.Count(x => x.Kind == ExportNodeKind.Project));
+            Equal(2, group.Children.Count(x => x.Kind == ExportNodeKind.Mesh));
         }
 
         private static void NestedAssetOnlyDescendsRequiredBranch()
@@ -554,8 +554,8 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(ExportNodeKind.Group, group.Kind);
             Equal(2, group.Children.Count);
             Equal(ExportNodeKind.Asset, group.Children.Single(x => x.Name == "cylinder").Kind);
-            Equal(ExportNodeKind.Project, group.Children.Single(x => x.Name == "fixture").Kind);
-            Equal(ExportNodeKind.Project, plan.Roots.Single(x => x.Name == "unrelated").Kind);
+            Equal(ExportNodeKind.Mesh, group.Children.Single(x => x.Name == "fixture").Kind);
+            Equal(ExportNodeKind.Mesh, plan.Roots.Single(x => x.Name == "unrelated").Kind);
             Equal(0, unrelated.Children[0].GetChildrenCalls);
         }
 
@@ -573,7 +573,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(ExportNodeKind.Group, group.Kind);
             Equal(2, group.Children.Count);
             Equal(2, group.Children.Count(node => node.Kind == ExportNodeKind.Asset));
-            Equal(0, group.Children.Count(node => node.Kind == ExportNodeKind.Project));
+            Equal(0, group.Children.Count(node => node.Kind == ExportNodeKind.Mesh));
         }
 
         private static void AllProjectRootContinuesToLeaves()
@@ -581,7 +581,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             var root = Root(); root.Add(Node("a", false, false), Node("b", false, false));
             var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
             Equal(2, plan.Roots.Count);
-            Equal(2, plan.Roots.Count(node => node.Kind == ExportNodeKind.Project));
+            Equal(2, plan.Roots.Count(node => node.Kind == ExportNodeKind.Mesh));
             True(plan.Roots.Any(node => node.Name == "a"));
             True(plan.Roots.Any(node => node.Name == "b"));
         }
@@ -774,6 +774,8 @@ namespace SolidWorksAssetExporter.Core.Tests
                 var doc = XDocument.Load(path);
                 Equal("m", (string)doc.Root.Attribute("length_unit"));
                 Equal("xyzw", (string)doc.Root.Attribute("quaternion_order"));
+                Equal("step", (string)doc.Root.Attribute("mesh_format"));
+                True(doc.Root.Attribute("project_mesh_format") == null);
                 var nodes = doc.Descendants("node").ToList();
                 Equal(3, nodes.Count);
                 var groupElement = nodes.Single(x => (string)x.Attribute("kind") == "group");
@@ -781,8 +783,9 @@ namespace SolidWorksAssetExporter.Core.Tests
                 var assetElement = nodes.Single(x => (string)x.Attribute("kind") == "asset");
                 True(assetElement.Element("mesh").Attribute("asset_id") != null);
                 True(assetElement.Element("mesh").Attribute("file") == null);
-                var projectElement = nodes.Single(x => (string)x.Attribute("kind") == "project");
-                True(((string)projectElement.Element("mesh").Attribute("file")).EndsWith("model.step", StringComparison.Ordinal));
+                var meshElement = nodes.Single(x => (string)x.Attribute("kind") == "mesh");
+                True(((string)meshElement.Element("mesh").Attribute("file")).EndsWith("model.step", StringComparison.Ordinal));
+                True(nodes.All(x => (string)x.Attribute("kind") != "project"));
             }
             finally { Directory.Delete(temp, true); }
         }
@@ -822,7 +825,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             {
                 var uuid = Guid.NewGuid().ToString("D"); var versionDir = Path.Combine(temp, uuid, "v2");
                 Directory.CreateDirectory(Path.Combine(versionDir, "meshes", "unit"));
-                var xml = "assembly_" + uuid + "_v2.xml";
+                var xml = "assembly_package_" + uuid + "_v2.xml";
                 File.WriteAllText(Path.Combine(versionDir, xml), "<assembly />");
                 File.WriteAllText(Path.Combine(versionDir, "meshes", "unit", "model.step"), "step");
                 File.WriteAllText(Path.Combine(versionDir, "meshes", "unit", "model.stl"), "stl");
@@ -1097,7 +1100,7 @@ namespace SolidWorksAssetExporter.Core.Tests
                 ProjectMeshFormat.Step, false);
             True(!plan.ExportProject);
             Equal(0, plan.AssemblyVersion);
-            var project = plan.Roots.Single(value => value.Kind == ExportNodeKind.Project);
+            var project = plan.Roots.Single(value => value.Kind == ExportNodeKind.Mesh);
             True(string.IsNullOrEmpty(project.GeometryUuid));
             True(string.IsNullOrEmpty(project.MeshFile));
             Equal(1, plan.Roots.Count(value => value.Kind == ExportNodeKind.Asset));
@@ -1687,8 +1690,8 @@ namespace SolidWorksAssetExporter.Core.Tests
                 Equal(0, result.AssetVersionsAlreadyRegistered);
                 Equal("/asset/registry", result.RemoteRegistryPath);
                 True(progress.Any(value => value.Contains("Asset 1/1") && value.Contains("HTTP 201")));
-                True(progress.Any(value => value.Contains("正在打包 Project")));
-                True(progress.Any(value => value.Contains("Project 已收到 HTTP 200")));
+                True(progress.Any(value => value.Contains("正在打包 Wanxiang Project")));
+                True(progress.Any(value => value.Contains("Wanxiang Project 已收到 HTTP 200")));
                 True(progress.Any(value => value.Contains("全部服务器响应均已收到")));
             }
             finally

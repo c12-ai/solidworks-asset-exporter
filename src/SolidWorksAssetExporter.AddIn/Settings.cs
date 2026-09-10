@@ -41,12 +41,12 @@ namespace SolidWorksAssetExporter.AddIn
             AssetLibraryRoot = Path.GetFullPath(AssetLibraryRoot);
             if (ExportProject)
             {
-                if (string.IsNullOrWhiteSpace(ProjectExportRoot)) throw new ValidationException("选择导出 Project 时必须设置 Project 导出根目录。");
+                if (string.IsNullOrWhiteSpace(ProjectExportRoot)) throw new ValidationException("选择导出 assembly_package 时必须设置 assembly_package 导出根目录。");
                 ProjectExportRoot = Path.GetFullPath(ProjectExportRoot);
                 var asset = AssetLibraryRoot.TrimEnd('\\') + "\\";
                 var project = ProjectExportRoot.TrimEnd('\\') + "\\";
                 if (asset.StartsWith(project, StringComparison.OrdinalIgnoreCase) || project.StartsWith(asset, StringComparison.OrdinalIgnoreCase))
-                    throw new ValidationException("Asset 资产库和 Project 导出目录不能相同或相互嵌套。");
+                    throw new ValidationException("Asset 资产库和 assembly_package 导出目录不能相同或相互嵌套。");
             }
             ValidateWanxiang();
         }

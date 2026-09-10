@@ -143,13 +143,13 @@ namespace SolidWorksAssetExporter.AddIn
             var elapsed = Stopwatch.StartNew();
             try
             {
-                Report(progress, "正在打包 Project...");
+                Report(progress, "正在打包 Wanxiang Project...");
                 Diagnostic("PROJECT PACK START local=" + localDirectory + " remote=" + remoteDirectory);
                 CreateArchive(localDirectory, archivePath);
                 var archiveBytes = new FileInfo(archivePath).Length;
                 Diagnostic("PROJECT PACK COMPLETE bytes=" + archiveBytes.ToString(CultureInfo.InvariantCulture) +
                     " elapsed_ms=" + elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
-                Report(progress, "Project 打包完成（" + FormatBytes(archiveBytes) + "），正在发送到 Wanxiang...");
+                Report(progress, "Wanxiang Project 打包完成（" + FormatBytes(archiveBytes) + "），正在发送到 Wanxiang...");
                 using (var stream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var content = new StreamContent(stream))
                 using (var request = new HttpRequestMessage(HttpMethod.Put, requestUri))
@@ -162,12 +162,12 @@ namespace SolidWorksAssetExporter.AddIn
                     {
                         var body = ReadBody(response);
                         DiagnosticResponse("PROJECT", request.Method, requestUri, response, body, elapsed);
-                        Report(progress, "Project 已收到 HTTP " + ((int)response.StatusCode).ToString(
+                        Report(progress, "Wanxiang Project 已收到 HTTP " + ((int)response.StatusCode).ToString(
                             CultureInfo.InvariantCulture) + "，正在校验响应...");
                         EnsureSuccess(response, body);
                         var result = Deserialize<WanxiangDirectoryUploadResult>(body);
                         result.HttpStatusCode = (int)response.StatusCode;
-                        Report(progress, "Project 上传完成：HTTP " + result.HttpStatusCode.ToString(
+                        Report(progress, "Wanxiang Project 上传完成：HTTP " + result.HttpStatusCode.ToString(
                             CultureInfo.InvariantCulture) + "，服务端写入 " + result.FilesExtracted.ToString(
                             CultureInfo.InvariantCulture) + " 个文件。");
                         return result;
