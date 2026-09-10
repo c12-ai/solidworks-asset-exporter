@@ -2,7 +2,7 @@
 
 协议标识：`solidworks-asset-property-protocol`
 
-协议版本：`1.0.0`
+协议版本：`1.1.0`
 
 本文是 Asset 属性的规范定义。资产识别、资产连接、资产使用、数据校验和后续扩展均以本协议为基础。
 
@@ -40,7 +40,7 @@ Agent 生成新数据时必须使用 `1` 或 `0`。
 | --- | --- | --- | --- | --- |
 | `is_asset` | boolean | `1` / `0` | 当前对象是否作为独立 Asset。`1` 表示它具有独立身份、属性和版本。 | `1` |
 | `零件名` | string | 非空文本 | Asset 的人类可读名称。名称描述对象本身，不承担身份或版本功能。 | `快换盘-上` |
-| `class` | enum | `movable` / `robot` / `equipment` / `structure` | Asset 的互斥主分类，表示“它主要是什么”。 | `movable` |
+| `class` | enum | `movable` / `robot` / `station` / `structure` | Asset 的互斥主分类，表示“它主要是什么”。 | `movable` |
 | `is_tool` | boolean | `1` / `0` | Asset 是否作为机器人末端工具使用。 | `1` |
 | `is_fixture` | boolean | `1` / `0` | Asset 是否具有定位、夹持、承载或接收其他 Asset/工件的能力。 | `1` |
 | `is_quick_changer` | boolean | `1` / `0` | Asset 是否为独立快换盘。快换盘不使用单独的 `class`。 | `1` |
@@ -66,10 +66,12 @@ Agent 生成新数据时必须使用 `1` 或 `0`。
 | --- | --- | --- |
 | `movable` | 能够被机器人移动、抓取或转移的对象。 | 工具、夹指、快换盘、试管、可搬运样品载具 |
 | `robot` | 提供运动执行能力的机器人。 | Hebe、Talos |
-| `equipment` | 机器人不能移动其整体，但需要与之交互的对象。 | 离心机、分析仪、固定试管架、快换支架 |
+| `station` | 整体固定、机器人不会搬运，但机器人会与其发生放置、取出、定位、加工或换装交互的对象。 | 离心机、分析仪、固定工位、支架适配器、快换支架 |
 | `structure` | 机器人不能移动且不需要与之交互的结构。 | 框架、护栏、纯支撑结构 |
 
 `class` 是单值主分类；`is_tool`、`is_fixture`、`is_quick_changer` 等是可组合角色。禁止使用旧值 `moveable`。
+
+`class` 与接口属性正交。禁止从 `class=station` 推导 `connection_interface` 必填：永久固定且不参与运行时装配校验的 Station，其 `connection_interface` 必须允许为空；只有 Station 作为可拆换子级、其上级连接需要建模时才填写。Station 若接收其他对象，应独立使用 `is_fixture=1` 和 `accepts_interfaces` 描述向下接口。
 
 ## 4. 角色语义
 
@@ -139,7 +141,7 @@ quick_changer_side = tool_side
 判定：
 
 ```text
-class                 = equipment
+class                 = station
 is_quick_changer_rack = 1
 ```
 
@@ -222,7 +224,7 @@ is_quick_changer=0
     => quick_changer_side 为空
 
 is_quick_changer_rack=1
-    => class=equipment
+    => class=station
     => accepts_interfaces 非空
 
 is_tool=1
@@ -336,13 +338,13 @@ asset_version          = 1
 ```text
 is_asset               = 1
 零件名                  = 快换支架
-class                  = equipment
+class                  = station
 is_tool                = 0
 is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 1
-connection_interface   = 工作台安装面
+connection_interface   =
 accepts_interfaces     = 快换盘-A
 slots_num              = 2
 is_adjustable          = 1
@@ -355,13 +357,13 @@ asset_version          = 1
 ```text
 is_asset               = 1
 零件名                  = 50ml试管架治具
-class                  = equipment
+class                  = station
 is_tool                = 0
 is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 0
-connection_interface   = 工作台安装面
+connection_interface   =
 accepts_interfaces     = 试管-D20
 slots_num              = 24
 is_adjustable          = 1
@@ -389,6 +391,22 @@ is_adjustable          = 0
 asset_version          = 1
 设计目的                 = 盛装并转移10ml样品
 ```
+
+### Station tube hierarchy
+
+Canonical minimal model:
+
+```text
+AdapterBase:       class=structure OR is_asset=0
+RackAdapter:       class=station, is_fixture=1,
+                   connection_interface="", accepts_interfaces=试管支架-A
+TubeRack:          class=movable, is_fixture=1,
+                   connection_interface=试管支架-A, accepts_interfaces=试管-D20
+Tube:              class=movable, is_fixture=0,
+                   connection_interface=试管-D20, accepts_interfaces=""
+```
+
+Do not create an interface edge between `AdapterBase` and `RackAdapter` when that joint is permanent and irrelevant to runtime assembly validation. If the adapter is a replaceable module, model that additional edge explicitly by assigning the adapter a `connection_interface` and the base the matching `accepts_interfaces`.
 
 ## 9. 版本与身份语义
 

@@ -1,6 +1,6 @@
 # 资产属性协议（工程师版）
 
-协议版本：`1.0.0`
+协议版本：`1.1.0`
 
 本协议定义资产有哪些属性、每个属性值表示什么，以及不同资产之间如何建立连接关系。后续资产定义、资产使用和资产数据检查均以本协议为基础。
 
@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | `is_asset` | `1` / `0` | 是否把当前对象作为一个独立资产。 | `1` |
 | `零件名` | 文本 | 资产的人类可读名称。 | `快换盘-下` |
-| `class` | `movable` / `robot` / `equipment` / `structure` | 资产的主要分类。 | `movable` |
+| `class` | `movable` / `robot` / `station` / `structure` | 资产的主要分类。 | `movable` |
 | `asset_version` | 从 `1` 开始的正整数 | 当前资产的内容版本。 | `1` |
 | `设计原理` | 文本 | 资产采用什么机械、电气或控制原理实现功能。 | `气缸驱动平行夹持` |
 | `设计目的` | 文本 | 资产要解决什么问题、实现什么用途。 | `夹持并转移压滤瓶` |
@@ -22,8 +22,10 @@
 | --- | --- | --- |
 | `movable` | 能够被机器人移动、抓取或转移的资产。 | 工具、夹指、快换盘、试管、可搬运试管架 |
 | `robot` | 提供运动执行能力的机器人。 | Hebe、Talos |
-| `equipment` | 机器人不能移动其整体，但需要与之交互的资产。 | 离心机、分析仪、固定试管架、快换支架 |
+| `station` | 整体固定、机器人不会搬运，但机器人会与其发生放置、取出、定位、加工或换装交互的资产。 | 离心机、分析仪、固定工位、支架适配器、快换支架 |
 | `structure` | 机器人不能移动且不需要与之交互的结构。 | 框架、护栏、纯支撑结构 |
+
+`class` 与接口是两个独立维度。`station` 不会自动要求 `connection_interface`：Station 与机架、地面或底板永久固定且该关系不参与运行时装配校验时，该字段留空；只有 Station 本身是可拆换模块、需要对其上级连接进行建模时才填写。Station 仍可通过 `is_fixture=1` 和 `accepts_interfaces` 描述它接收的试管架、载具或快换组件。
 
 ## 2. 角色属性
 
@@ -223,13 +225,13 @@ asset_version          = 1
 ```text
 is_asset               = 1
 零件名                  = 快换支架
-class                  = equipment
+class                  = station
 is_tool                = 0
 is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 1
-connection_interface   = 工作台安装面
+connection_interface   =
 accepts_interfaces     = 快换盘-A
 slots_num              = 2
 is_adjustable          = 1
@@ -242,13 +244,13 @@ asset_version          = 1
 ```text
 is_asset               = 1
 零件名                  = 50ml试管架治具
-class                  = equipment
+class                  = station
 is_tool                = 0
 is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 0
-connection_interface   = 工作台安装面
+connection_interface   =
 accepts_interfaces     = 试管-D20
 slots_num              = 24
 is_adjustable          = 1
@@ -256,7 +258,7 @@ asset_version          = 1
 设计目的                 = 定位并承载50ml试管
 ```
 
-含义：固定试管架不能被机器人整体移动，但需要接收机器人放入的试管，因此属于 `equipment`；它接受外径 20 mm 的试管接口。
+含义：固定试管架不能被机器人整体移动，但需要接收机器人放入的试管，因此属于 `station`；它接受外径 20 mm 的试管接口。其与工作台永久固定，所以 `connection_interface` 留空。
 
 ### 6.7 10 ml 试管
 
@@ -280,6 +282,38 @@ asset_version          = 1
 ```
 
 这里 `10ml` 是资产规格，`试管-D20` 才是与试管架匹配的机械接口。
+
+### 6.8 Station 中的试管层级
+
+固定 Station 内建议只建模运行时会发生变化的两层连接：
+
+```text
+适配器底板（structure，或 is_asset=0）
+└─ 支架适配器（station，永久固定所以 connection_interface 为空）
+   └─ 试管支架（movable，connection_interface=试管支架-A）
+      └─ 试管（movable，connection_interface=试管-D20）
+```
+
+支架适配器作为固定工位：
+
+```text
+class                  = station
+is_fixture             = 1
+connection_interface   =
+accepts_interfaces     = 试管支架-A
+slots_num              = 1
+```
+
+试管支架作为可搬运载具：
+
+```text
+class                  = movable
+is_fixture             = 1
+connection_interface   = 试管支架-A
+accepts_interfaces     = 试管-D20
+```
+
+适配器底板若只承担永久支撑，应使用 `class=structure`；若只是支架适配器组件内部的普通零件，则使用 `is_asset=0`。只有适配器本身需要从底板拆换并校验连接时，才给适配器填写 `connection_interface`，同时在底板填写对应的 `accepts_interfaces`。
 
 ## 7. 资产连接关系
 
