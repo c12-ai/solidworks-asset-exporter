@@ -64,12 +64,16 @@ namespace SolidWorksAssetExporter.AddIn
 
         public WanxiangUploadCompletion Upload(WanxiangDataClient client, ExportCompletion localExport, ExporterSettings settings)
         {
-            return UploadCore(client, localExport, settings, null, null);
+            return Upload(client, localExport, settings, null);
         }
 
         public WanxiangUploadCompletion Upload(WanxiangDataClient client, ExportCompletion localExport,
             ExporterSettings settings, Action<string> progress)
         {
+            if (localExport == null) throw new ArgumentNullException("localExport");
+            if (settings == null) throw new ArgumentNullException("settings");
+            settings.Validate();
+            if (!settings.UploadAfterExport) throw new ValidationException("当前设置未启用导出后上传。");
             return UploadCore(client, localExport, settings, progress, null);
         }
 
@@ -78,7 +82,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             if (client == null) throw new ArgumentNullException("client");
             var completion = new WanxiangUploadCompletion();
-            var remoteProjectRoot = WanxiangRemoteLayout.Projects;
+            var remoteProjectRoot = WanxiangRemoteLayout.AssemblyPackage;
             var remoteRegistry = WanxiangRemoteLayout.AssetRegistryEndpoint;
             var downloadedRegistry = Path.Combine(Path.GetTempPath(), "wanxiang-registry-" +
                 Guid.NewGuid().ToString("N") + ".json");
@@ -94,7 +98,7 @@ namespace SolidWorksAssetExporter.AddIn
                 if (assetDirectories.Count != registrations.Count)
                     throw new ValidationException("本地 Asset 目录与待发布版本数量不一致，拒绝上传不完整批次。");
                 Report(progress, log, "准备上传 " + registrations.Count.ToString(CultureInfo.InvariantCulture) +
-                    " 个 Asset" + (settings.ExportProject ? " 和 1 个 Wanxiang Project。" : "；本次不上传 assembly_package/Wanxiang Project。"));
+                    " 个 Asset" + (settings.ExportProject ? " 和 1 个 Wanxiang assembly_package。" : "；本次不上传 assembly_package。"));
                 for (var index = 0; index < registrations.Count; index++)
                 {
                     var registration = registrations[index];
@@ -122,7 +126,7 @@ namespace SolidWorksAssetExporter.AddIn
                         throw new ValidationException("已选择导出 assembly_package，但本地导出结果缺少装配包目录。");
                     var projectRelative = PathPolicy.RelativeTo(settings.ProjectExportRoot, localExport.ProjectDirectory).Replace('\\', '/');
                     var remoteProject = WanxiangRemotePath.Combine(remoteProjectRoot, projectRelative);
-                    Report(progress, log, "Asset 上传完成，开始处理 Wanxiang Project：" + remoteProject);
+                    Report(progress, log, "Asset 上传完成，开始处理 Wanxiang assembly_package：" + remoteProject);
                     var projectResult = client.UploadDirectory(localExport.ProjectDirectory, remoteProject,
                         delegate(string message) { Report(progress, log, message); });
                     completion.FilesExtracted += projectResult.FilesExtracted;

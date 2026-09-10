@@ -88,7 +88,7 @@ namespace SolidWorksAssetExporter.AddIn
             _saveRegistryLocally.AutoSize = true; _saveRegistryLocally.Dock = DockStyle.Fill;
             layout.Controls.Add(_saveRegistryLocally, 1, 8); layout.SetColumnSpan(_saveRegistryLocally, 2);
 
-            var hint = new Label { Text = "本地整机称为 assembly_package；上传后仍是 Wanxiang Project（projects）；Robot 仅在装配包 XML 中写 robot_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
+            var hint = new Label { Text = "本地与 Wanxiang 顶层目录统一为 assembly_package；Robot 仅在装配包 XML 中写 robot_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
             layout.Controls.Add(hint, 0, 9); layout.SetColumnSpan(hint, 3);
             _preview.Multiline = true; _preview.ReadOnly = true; _preview.ScrollBars = ScrollBars.Both; _preview.WordWrap = false;
             _preview.Font = new Font(FontFamily.GenericMonospace, 9f); _preview.Dock = DockStyle.Fill;
@@ -272,7 +272,7 @@ namespace SolidWorksAssetExporter.AddIn
                     _viewUploadLog.Enabled = File.Exists(_lastUploadLogPath);
                 }
                 var uploadText = upload == null ? "未启用" : string.Format(
-                    "完成（Asset 原子发布 {0}，新注册 {1}，幂等复用 {2}，Wanxiang Project {3}，注册表 {4}）\r\n上传日志: {5}",
+                    "完成（Asset 原子发布 {0}，新注册 {1}，幂等复用 {2}，Wanxiang assembly_package {3}，注册表 {4}）\r\n上传日志: {5}",
                     upload.AssetDirectoriesUploaded, upload.AssetVersionsRegistered,
                     upload.AssetVersionsAlreadyRegistered, upload.RemoteProjectDirectory,
                     upload.RemoteRegistryPath, upload.UploadLogPath);

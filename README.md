@@ -2,10 +2,10 @@
 
 这是一个面向 SOLIDWORKS 2025/2026、.NET Framework 4.8、64 位进程的 C# COM Add-in。它把当前装配体拆成四种节点：
 
-术语边界：SOLIDWORKS 当前总装配体在本地导出的完整版本目录称为 `assembly_package`（装配包）；装配包上传到 Wanxiang 后仍注册和保存为 Wanxiang `Project`。远端 `projects/` 目录、`PUT /archive/projects/...` 和已有 `settings.json` 兼容配置键 `project_*` 保持不变；装配 XML 根属性使用 `mesh_format`，普通几何叶节点统一写为 `kind="mesh"`。
+术语边界：SOLIDWORKS 当前总装配体在本地和 Wanxiang 中统一称为 `assembly_package`（装配包）。本地顶层目录与 Wanxiang 远端顶层目录均为 `assembly_package/`，上传使用通用接口 `PUT /archive/assembly_package/...`。已有 `settings.json` 兼容配置键 `project_*` 保持不变；装配 XML 根属性使用 `mesh_format`，普通几何叶节点统一写为 `kind="meshes"`。
 
 - `Asset`：当前节点 `is_asset=true|1|yes`。这是硬终止边界，分类扫描不会读取其子节点，也不会在内部发现第二个 Asset。
-- `assembly_package geometry`：没有可继续拆分子节点的非 Asset 叶节点，作为装配包中的本地 STEP/STL 几何单元；XML 写为 `kind="mesh"`。
+- `assembly_package geometry`：没有可继续拆分子节点的非 Asset 叶节点，作为装配包中的本地 STEP/STL 几何单元；XML 写为 `kind="meshes"`。
 - `Group`：自身不是 Asset，并且仍有可见、未抑制、非包络子节点。保留装配层级和位姿，没有 mesh，并继续向下拆分。
 - `Robot`：`is_asset=true` 且 `class=robot` 的硬边界。它不生成 Asset 包或几何，只在启用 assembly_package 导出时保留层级、位姿和 `robot_id` 地址。
 
@@ -32,11 +32,11 @@
 - 分类预览会完成装配树分类，同时计算 Asset 与 assembly_package 内容指纹：Asset 立即对照 Wanxiang 注册表判断 `asset_version`，assembly_package 立即检查本地相同 UUID/`assembly_version` 的 `export-report.json`。取消“导出 assembly_package”后，不要求 `assembly_version`，也不计算或校验装配包指纹；Asset 预览、导出和注册仍照常执行。Robot 不进入 Asset/assembly_package 几何指纹队列；`robot_id` 直接由文件级“设计目的”和正整数 `asset_version` 以英文冒号拼接生成，例如 `Hebe:1`。任何版本冲突都在预览中显示并禁用“导出”，不会等到导出阶段才首次发现。属性缺失、模型读取、Asset 指纹和 assembly_package 指纹等可继续检查的问题会遍历完成后一次性汇总提示。预览会保留 Asset/assembly_package 指纹以及源文件/打开文档快照；点击导出时不再执行第二次完整分类或重新计算装配包指纹，只校验源文件大小与修改时间、会话内更新标记、活动配置、Wanxiang 最新 Asset 注册表及 assembly_package 本地版本状态，变化时要求重新预览。装配包几何指纹按“唯一源文件+配置”去重，重复装配实例不重复读取同一文件；几何单元直接使用持久 SHA-256 缓存，不调用 Pack and Go。导出窗口显示当前 Asset/assembly_package 阶段并可在单个 SOLIDWORKS 操作结束后取消。
 - 导出模型文档当前活动配置及显示状态，不切换配置或显示状态；导出后恢复选择和 STEP/STL 全局设置。
 - 几何、Pack and Go 和关联图纸操作统一按需获取模型文档，完成后关闭插件本次打开或临时激活的窗口。装配体引用件不再被强制以只读模式打开；`CloseDoc` 后仍注册在 SOLIDWORKS 时会调用 `QuitDoc`。父装配体可以继续把不可见、非只读的组件文档保留在内存中，这不再被误判为窗口关闭失败；总装以及用户原先已打开的模型窗口保持不变。
-- 可选在本地导出成功后直接上传到 [wanxiang-data-service](https://github.com/c12-ai/wanxiang-data-service)：每个 Asset 版本目录打成 ZIP 后，通过 Wanxiang 0.4.0 的 `PUT /asset/{uuid}/v{version}` 单次原子发布，请求头携带 `X-Content-Fingerprint`；本地 assembly_package 作为 Wanxiang Project 通过 `PUT /archive/projects/{path}` 上传。插件不通过通用文件接口写 `assets/` 或注册表；请求使用 Bearer API key 并绕过开发机代理。
-- 上传顺序固定为 Asset 原子发布、Wanxiang Project 上传。Asset 发布接口的 201 新注册和 200 幂等复用都视为成功；409 冲突不会留下半发布目录或改动注册表。只有启用“保存本地副本”时，发布完成后才通过 `GET /asset/registry` 下载服务端最终注册表并同步到本地。
-- 上传状态逐项显示 `Asset N/M`，Wanxiang Project 分别显示打包、发送、收到 HTTP 响应和校验完成。每次上传都会在 `%LOCALAPPDATA%\SolidWorksAssetExporter\uploads` 创建独立日志，记录请求 URL、HTTP 状态码、耗时和截断后的响应摘要（不记录 API key）；插件界面可通过“查看上传日志”直接打开。上传请求使用完整响应读取，使 30 分钟 HTTP 超时同时覆盖请求体和响应体，避免服务端已处理但客户端无限等待响应结束。
+- 可选在本地导出成功后直接上传到 [wanxiang-data-service](https://github.com/c12-ai/wanxiang-data-service)：每个 Asset 版本目录打成 ZIP 后，通过 Wanxiang 0.4.0 的 `PUT /asset/{uuid}/v{version}` 单次原子发布，请求头携带 `X-Content-Fingerprint`；本地 assembly_package 通过通用目录接口 `PUT /archive/assembly_package/{path}` 上传。插件不通过通用文件接口写 `assets/` 或注册表；请求使用 Bearer API key 并绕过开发机代理。
+- 上传顺序固定为 Asset 原子发布、Wanxiang assembly_package 上传。Asset 发布接口的 201 新注册和 200 幂等复用都视为成功；409 冲突不会留下半发布目录或改动注册表。只有启用“保存本地副本”时，发布完成后才通过 `GET /asset/registry` 下载服务端最终注册表并同步到本地。
+- 上传状态逐项显示 `Asset N/M`，Wanxiang assembly_package 分别显示打包、发送、收到 HTTP 响应和校验完成。每次上传都会在 `%LOCALAPPDATA%\SolidWorksAssetExporter\uploads` 创建独立日志，记录请求 URL、HTTP 状态码、耗时和截断后的响应摘要（不记录 API key）；插件界面可通过“查看上传日志”直接打开。上传请求使用完整响应读取，使 30 分钟 HTTP 超时同时覆盖请求体和响应体，避免服务端已处理但客户端无限等待响应结束。
 
-现有 74 项自动测试，包括 Asset 硬边界短路、父 Asset 跳过子属性、Asset UUID 仅由内部创建时间和文件名生成、配置特定属性完全忽略、必填 Asset 属性完整汇总、快换接口属性汇总校验与角色推导、Wanxiang 0.4.0 `class` 拼写校验、Asset 指纹版本复用/升级/重复内容判断、Robot 仅生成 assembly_package XML 地址引用、关闭 assembly_package 后跳过其本地/远端输出、需升版外部 Asset 自动打开且非只读、虚拟 Asset 根不作为升版文档打开、远端未注册的本地冲突包备份重建且不误报升版、预览纯文件系统图纸查找、原始 SLDDRW 与源模型同目录且不生成 PDF、未变化文件哈希缓存复用、零件 Asset 及装配包几何单元均不调用 Pack and Go、预览后源文件变化拒绝导出、Wanxiang `GET /asset/registry` 预览、默认不保存本地副本和逻辑空注册表、`PUT /asset/{uuid}/v{version}` 原子发布及 Asset→Wanxiang Project 顺序、上传逐项进度、可读日志和不泄漏 API key 的 HTTP 响应诊断、轻化组件读取文件级 `is_asset=1`、同一源文件的重复实例只读取一次、已加载组件返回父装配文档时按源路径回退、虚拟/内嵌组件只在父装配中解析并恢复原轻化状态、Pack and Go 允许虚拟子组件不作为独立文件出现、Pack and Go 只在临时激活目标 Asset 子装配体后运行并恢复原窗口、Pack and Go 隔离 Asset 边界外上下文引用、Pack and Go 状态数组长度变化但 Asset 输出完整时继续提交、插件解析或配置恢复产生的 dirty 标志与后续用户模型修改相区分、完整元数据只读取文件级自定义属性、Wanxiang Bearer/URL/ZIP 契约、模型窗口所有权、避免强制只读、`QuitDoc` 关闭回退、父装配内存引用和激活警告；Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建，生产构建不会包含该 stub。
+现有 74 项自动测试，包括 Asset 硬边界短路、父 Asset 跳过子属性、Asset UUID 仅由内部创建时间和文件名生成、配置特定属性完全忽略、必填 Asset 属性完整汇总、快换接口属性汇总校验与角色推导、Wanxiang 0.4.0 `class` 拼写校验、Asset 指纹版本复用/升级/重复内容判断、Robot 仅生成 assembly_package XML 地址引用、关闭 assembly_package 后跳过其本地/远端输出、需升版外部 Asset 自动打开且非只读、虚拟 Asset 根不作为升版文档打开、远端未注册的本地冲突包备份重建且不误报升版、预览纯文件系统图纸查找、原始 SLDDRW 与源模型同目录且不生成 PDF、未变化文件哈希缓存复用、零件 Asset 及装配包几何单元均不调用 Pack and Go、预览后源文件变化拒绝导出、Wanxiang `GET /asset/registry` 预览、默认不保存本地副本和逻辑空注册表、`PUT /asset/{uuid}/v{version}` 原子发布及 Asset→assembly_package 顺序、本地与远端 assembly_package 路径一致性、上传逐项进度、可读日志和不泄漏 API key 的 HTTP 响应诊断、轻化组件读取文件级 `is_asset=1`、同一源文件的重复实例只读取一次、已加载组件返回父装配文档时按源路径回退、虚拟/内嵌组件只在父装配中解析并恢复原轻化状态、Pack and Go 允许虚拟子组件不作为独立文件出现、Pack and Go 只在临时激活目标 Asset 子装配体后运行并恢复原窗口、Pack and Go 隔离 Asset 边界外上下文引用、Pack and Go 状态数组长度变化但 Asset 输出完整时继续提交、插件解析或配置恢复产生的 dirty 标志与后续用户模型修改相区分、完整元数据只读取文件级自定义属性、Wanxiang Bearer/URL/ZIP 契约、模型窗口所有权、避免强制只读、`QuitDoc` 关闭回退、父装配内存引用和激活警告；Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建，生产构建不会包含该 stub。
 
 本项目已在 SOLIDWORKS Premium 2025 SP5.0 和官方 Interop 33.5.0.53 上完成生产构建、COM 安装与加载和命令打开验证。轻量化装配体按需文档生命周期、完整 STEP/STL、装配体 Asset Pack and Go 和 SLDDRW 产物仍需完成最终现场验收。SOLIDWORKS 2026 尚未实机验证。
 
@@ -168,7 +168,7 @@ Asset 的 `content_fingerprint` 分两层计算：先对 Asset 根模型及其�
 
 ## 输出
 
-“Asset 本地输出根目录”保存可跨 assembly_package/Wanxiang Project 复用的 Asset 版本包；“assembly_package 本地输出根目录”保存当前 SOLIDWORKS 总装配体的 XML、STEP/STL 和导出报告。勾选“导出 assembly_package”时两者必须分开，防止全局 Asset 库与一次性装配包结果互相覆盖；关闭后装配包根目录可以留空，只导出/上传非 Robot Asset。
+“Asset 本地输出根目录”保存可跨 assembly_package 复用的 Asset 版本包；“assembly_package 本地输出根目录”应选择名为 `assembly_package` 的顶层目录，用于保存当前 SOLIDWORKS 总装配体的 XML、STEP/STL 和导出报告。历史设置若以 `project` 或 `projects` 结尾，插件会自动迁移为同级的 `assembly_package`。勾选“导出 assembly_package”时两个根目录必须分开，防止全局 Asset 库与一次性装配包结果互相覆盖；关闭后装配包根目录可以留空，只导出/上传非 Robot Asset。
 
 ```text
 asset-library/
@@ -179,9 +179,9 @@ asset-library/
     geometry/model.stl
     source/models/             # SLDASM/SLDPRT/SLDDRW
 
-assembly_package-export/
+assembly_package/
   <assembly-uuid>/v<assembly-version>/
-    assembly_package_<assembly-uuid>_v<version>.xml
+    assembly_<assembly-uuid>_v<version>.xml
     meshes/<project-unit-uuid>/model.step
     meshes/<project-unit-uuid>/model.stl
     export-report.json
@@ -204,13 +204,13 @@ Robot 节点不属于 assembly_package 几何单元，因此不会出现在 `mes
 assets/
   asset-registry.json
   <asset-uuid>/v<asset-version>/...
-projects/
+assembly_package/
   <assembly-uuid>/v<assembly-version>/...
 ```
 
-分类预览固定调用 `GET /asset/registry`；注册表尚不存在时服务返回逻辑空表及 `X-Registry-Exists: false`。每个 Asset 版本通过 `PUT /asset/{uuid}/v{version}` 上传完整 ZIP，并在 `X-Content-Fingerprint` 中发送 manifest 指纹；服务端校验 manifest、必需文件、大小和 SHA-256 后一次性提交版本目录与注册表。本地 assembly_package 继续作为 Wanxiang Project 使用 `PUT /archive/projects/...`。网络或服务端失败不会删除本地导出结果；相同包可幂等重试，409 冲突必须重新预览或修改 `asset_version`。
+分类预览固定调用 `GET /asset/registry`；注册表尚不存在时服务返回逻辑空表及 `X-Registry-Exists: false`。每个 Asset 版本通过 `PUT /asset/{uuid}/v{version}` 上传完整 ZIP，并在 `X-Content-Fingerprint` 中发送 manifest 指纹；服务端校验 manifest、必需文件、大小和 SHA-256 后一次性提交版本目录与注册表。本地 assembly_package 使用 `PUT /archive/assembly_package/...` 上传到同名远端顶层目录。网络或服务端失败不会删除本地导出结果；相同包可幂等重试，409 冲突必须重新预览或修改 `asset_version`。
 
-Robot 不调用 `PUT /asset/{uuid}/v{version}`。它只作为 assembly_package XML（上传后的 Wanxiang Project XML）中的 `robot_id="设计目的:asset_version"` 地址引用。
+Robot 不调用 `PUT /asset/{uuid}/v{version}`。它只作为 assembly_package XML 中的 `robot_id="设计目的:asset_version"` 地址引用；本地和上传后的 XML 内容保持一致。
 
 XML 示例：
 
@@ -225,7 +225,7 @@ XML 示例：
       <pose tx="0.1" ty="0" tz="0" qx="0" qy="0" qz="0" qw="1" />
       <mesh asset_id="<uuid>:2" />
     </node>
-    <node id="..." parent_id="..." name="Fixture-1" kind="mesh">
+    <node id="..." parent_id="..." name="Fixture-1" kind="meshes">
       <pose tx="0" ty="0.2" tz="0" qx="0" qy="0" qz="0" qw="1" />
       <mesh file="meshes/<project-unit-uuid>/model.step" />
     </node>
@@ -237,7 +237,7 @@ XML 示例：
 </assembly>
 ```
 
-Asset、装配包几何节点都是叶节点；Group 没有 mesh。装配包几何节点统一序列化为 `kind="mesh"`，不再产生 `kind="project"`。XML 不输出 joint、轴或关节类型。混合拆分时至少要有一个可见、未抑制、非包络的固定顶层组件，并把固定组件优先写入节点序列，但不会把真实位姿归零。
+Asset、装配包几何节点都是叶节点；Group 没有 mesh。装配包几何节点统一序列化为 `kind="meshes"`，不产生 `kind="project"` 或单数 `kind="mesh"`。XML 不输出 joint、轴或关节类型。混合拆分时至少要有一个可见、未抑制、非包络的固定顶层组件，并把固定组件优先写入节点序列，但不会把真实位姿归零。
 
 ## 构建与测试
 
@@ -263,8 +263,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Vers
 ### v1.0.7 升版说明
 
 - SOLIDWORKS 本地整机导出统一命名为 `assembly_package`（装配包），工具菜单、导出窗口、分类预览、错误提示和本地报告说明同步更新。
-- Wanxiang 的 `Project` 实体、`projects/` 目录、`PUT /archive/projects/...` 和 `settings.json` 兼容配置键保持不变；assembly_package 上传后映射为 Wanxiang Project。装配 XML 根属性由 `project_mesh_format` 更新为 `mesh_format`，普通几何节点由 `kind="project"` 更新为 `kind="mesh"`。
-- 保留既有版本目录结构、UUID 和历史 `settings.json`；XML 文件名改为 `assembly_package_<uuid>_v<version>.xml`，根属性改为 `mesh_format`，普通几何节点改为 `kind="mesh"`。由于装配包 XML 契约已变化，已有相同 UUID 的旧内容需要提升 `assembly_version` 后重新导出。
+- Wanxiang 顶层目录由 `projects/` 改为 `assembly_package/`，上传目标同步改为 `PUT /archive/assembly_package/...`；已有 `settings.json` 兼容配置键保持不变。
+- XML 文件名前缀保留 `assembly_`，根属性使用 `mesh_format`，普通几何节点使用复数 `kind="meshes"`。由于装配包 XML 契约已变化，已有相同 UUID 的旧内容需要提升 `assembly_version` 后重新导出。
 
 ### v1.0.6 升版说明
 
@@ -276,10 +276,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Vers
 
 ### v1.0.5 升版说明
 
-- 同步 Wanxiang 0.4.0：Asset 使用单次 ZIP 原子发布；assembly_package 仍作为 Wanxiang Project 进行目录 ZIP 上传，发布冲突不会留下半成品或覆盖远端数据。
+- 同步 Wanxiang 0.4.x：Asset 使用单次 ZIP 原子发布；assembly_package 使用 `/archive/assembly_package/...` 进行目录 ZIP 上传，发布冲突不会留下半成品或覆盖远端数据。
 - Asset UUID 升级为 v2 规则，仅由 SOLIDWORKS 内部创建时间和完整文件名生成；新增持久 SHA-256 缓存和基于远端注册表的版本判断。
 - `class=robot` 改为 assembly_package XML 的 `robot_id` 地址引用；不生成 Asset 包、几何、源模型或注册记录。
-- 新增“导出 assembly_package”选项；关闭后只处理非 Robot Asset，并跳过装配包本地输出、Wanxiang Project 上传及 `assembly_version` 检查。
+- 新增“导出 assembly_package”选项；关闭后只处理非 Robot Asset，并跳过装配包本地输出、Wanxiang assembly_package 上传及 `assembly_version` 检查。
 - 分类和 manifest 统一只读取文件级“自定义”属性，忽略“配置特定”属性；缺失或空白的必填字段会一次性汇总提示。
 - Wanxiang 发布严格校验可发布 `class` 拼写，并增加逐项上传进度、HTTP 响应诊断和不包含 API key 的本地日志。
 - 非 Asset 装配体改为持续拆分到叶节点；Asset 仍是硬边界，不读取其内部节点属性。

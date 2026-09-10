@@ -1,6 +1,6 @@
 # Wanxiang 0.4.0 Asset / Project 接口契约
 
-命名说明：SOLIDWORKS 插件在本地把当前总装配体的完整导出目录称为 `assembly_package`（装配包）；本契约中的 `Project` 是 Wanxiang 远端实体。assembly_package 上传后映射为 Project，远端名称、路径和接口均不改名。
+命名说明：SOLIDWORKS 插件在本地和 Wanxiang 远端均把当前总装配体的完整导出目录称为 `assembly_package`（装配包）。本地与远端顶层目录统一为 `assembly_package/`。
 
 本文记录 SOLIDWORKS Asset Exporter 与 `wanxiang-data-service` main 分支的当前对接契约。
 同步基准：`bd2476c6426e79b2e3b53d532fb71de3b6f71886`（2026-09-03）。
@@ -8,7 +8,7 @@
 ## 1. 固定远端布局
 
 - Asset：`assets/<uuid>/v<version>/...`，只能通过资产原子发布接口写入。
-- Project：由本地 assembly_package 上传而来，保存到 `projects/<assembly-uuid>/v<assembly-version>/...`，继续使用通用目录 ZIP 接口。
+- assembly_package：保存到 `assembly_package/<assembly-uuid>/v<assembly-version>/...`，使用通用目录 ZIP 接口。
 - Robot：不进入 `assets/`；仅在 Project XML 中写 `<mesh robot_id="设计目的:asset_version" />`。
 - 客户端请求路径不再包含旧的共享目录前缀（例如 `wanxiang_test/`）。
 
@@ -138,20 +138,20 @@ ZIP 文件条目必须与 manifest `files` 完全一致，manifest 自身不写�
 Project 仍使用：
 
 ```http
-PUT /archive/projects/<assembly-uuid>/v<assembly-version>
+PUT /archive/assembly_package/<assembly-uuid>/v<assembly-version>
 Content-Type: application/zip
 
 <Project 目录 ZIP 原始字节>
 ```
 
-关闭“导出 assembly_package”后，不生成本地装配包，也不上传 Wanxiang Project；普通非 Robot Asset 的原子发布仍照常执行。
+关闭“导出 assembly_package”后，不生成或上传 assembly_package；普通非 Robot Asset 的原子发布仍照常执行。
 
 ## 5. 插件上传顺序
 
 1. 分类预览读取 `GET /asset/registry` 并完成版本、属性和包前置检查；
 2. 本地生成或复用所有非 Robot Asset 版本目录；
 3. 逐项调用 `PUT /asset/{uuid}/v{version}` 原子发布 Asset；
-4. 若启用 assembly_package 导出，将装配包作为 Wanxiang Project 调用 `PUT /archive/projects/...`；
+4. 若启用 assembly_package 导出，调用 `PUT /archive/assembly_package/...` 上传到同名远端顶层目录；
 5. 若启用本地注册表副本，再次调用 `GET /asset/registry`，校验 ETag 后保存。
 
 Asset 逐项发布的 200/201 都是成功。若中途失败，已成功发布的版本保持有效；再次执行时由 200 幂等复用。
@@ -162,7 +162,7 @@ Asset 逐项发布的 200/201 都是成功。若中途失败，已成功发布�
 - 请求带 Bearer 和 `X-Content-Fingerprint`；
 - 请求体 ZIP 根包含 manifest，且条目与 `files` 完全一致；
 - 不出现 `PUT /archive/assets/...` 或 `POST /asset/registry`；
-- Project 仍写入 `/archive/projects/...`；
+- assembly_package 写入 `/archive/assembly_package/...`；
 - 201 与 200 都显示成功，409 保留本地包并显示服务端错误；
 - `moveable`、空“零件名”、空“设计目的”在分类预览中一次性列出；
 - Robot 不发布 Asset，Project XML 中使用 `robot_id="Hebe:1"` 形式。

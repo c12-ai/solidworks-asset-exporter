@@ -482,7 +482,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             result.ProjectFingerprints.Clear();
             var failed = false;
-            var groups = Flatten(result.Plan.Roots).Where(node => node.Kind == ExportNodeKind.Mesh)
+            var groups = Flatten(result.Plan.Roots).Where(node => node.Kind == ExportNodeKind.Meshes)
                 .GroupBy(node => node.GeometryUuid, StringComparer.OrdinalIgnoreCase).ToList();
             for (var index = 0; index < groups.Count; index++)
             {
@@ -678,7 +678,7 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var node in Flatten(result.Plan.Roots))
             {
                 if (node.Kind == ExportNodeKind.Robot) continue;
-                if (node.Kind == ExportNodeKind.Mesh && !result.Plan.ExportProject) continue;
+                if (node.Kind == ExportNodeKind.Meshes && !result.Plan.ExportProject) continue;
                 AddSnapshotPath(paths, ((SwCadNode)node.Source).SourcePath);
             }
             foreach (var inspection in result.AssetInspections.Values)
@@ -861,7 +861,7 @@ namespace SolidWorksAssetExporter.AddIn
 
             using (var transaction = new DirectoryTransaction(destination))
             {
-                var projects = Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Mesh)
+                var projects = Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Meshes)
                     .GroupBy(node => node.GeometryUuid, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).ToList();
                 for (var index = 0; index < projects.Count; index++)
                 {
@@ -873,7 +873,7 @@ namespace SolidWorksAssetExporter.AddIn
                 }
 
                 Checkpoint(progress, cancellationRequested, "生成 assembly_package XML 和 export-report.json");
-                var xmlName = "assembly_package_" + plan.AssemblyUuid + "_v" + plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + ".xml";
+                var xmlName = "assembly_" + plan.AssemblyUuid + "_v" + plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + ".xml";
                 AssemblyXmlWriter.Write(Path.Combine(transaction.StagingDirectory, xmlName), plan);
                 var relativeFiles = Directory.EnumerateFiles(transaction.StagingDirectory, "*", SearchOption.AllDirectories)
                     .Select(path => PathPolicy.RelativeTo(transaction.StagingDirectory, path)).ToList();
@@ -963,7 +963,7 @@ namespace SolidWorksAssetExporter.AddIn
         private static void AppendPreview(StringBuilder builder, ExportNode node, string indent, bool last,
             IDictionary<string, string> assetVersionMessages, ISet<string> seenAssets, bool exportProject)
         {
-            var kindLabel = node.Kind == ExportNodeKind.Mesh ? "Mesh" : node.Kind.ToString();
+            var kindLabel = node.Kind == ExportNodeKind.Meshes ? "Meshes" : node.Kind.ToString();
             builder.Append(indent).Append(last ? "└─ " : "├─ ").Append(kindLabel.PadRight(15)).Append(' ').Append(node.Name);
             if (node.Kind == ExportNodeKind.Asset)
             {
@@ -975,7 +975,7 @@ namespace SolidWorksAssetExporter.AddIn
                 }
                 else builder.Append("  [同一 Asset 的另一实例]");
             }
-            if (node.Kind == ExportNodeKind.Mesh)
+            if (node.Kind == ExportNodeKind.Meshes)
                 builder.Append(exportProject ? "  [导出装配包 STEP/STL]" : "  [未选择导出 assembly_package]");
             if (node.Kind == ExportNodeKind.Robot)
                 builder.Append(exportProject

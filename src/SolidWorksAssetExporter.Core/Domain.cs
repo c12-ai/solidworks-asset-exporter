@@ -5,7 +5,7 @@ namespace SolidWorksAssetExporter.Core
 {
     public enum DocumentKind { Part, Assembly, Drawing, Unknown }
     public enum ScanClassification { AssetBoundary, ContainsAsset, NoAsset }
-    public enum ExportNodeKind { Group, Asset, Mesh, Robot }
+    public enum ExportNodeKind { Group, Asset, Meshes, Robot }
     public enum ProjectMeshFormat { Step, Stl }
 
     public sealed class ValidationException : Exception

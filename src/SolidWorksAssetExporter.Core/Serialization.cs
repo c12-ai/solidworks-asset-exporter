@@ -118,7 +118,7 @@ namespace SolidWorksAssetExporter.Core
                 Number("qx", node.Pose.Rotation.X), Number("qy", node.Pose.Rotation.Y),
                 Number("qz", node.Pose.Rotation.Z), Number("qw", node.Pose.Rotation.W)));
             if (node.Kind == ExportNodeKind.Asset) element.Add(new XElement("mesh", new XAttribute("asset_id", node.AssetId)));
-            if (node.Kind == ExportNodeKind.Mesh && !string.IsNullOrWhiteSpace(node.MeshFile))
+            if (node.Kind == ExportNodeKind.Meshes && !string.IsNullOrWhiteSpace(node.MeshFile))
                 element.Add(new XElement("mesh", new XAttribute("file", node.MeshFile)));
             if (node.Kind == ExportNodeKind.Robot)
                 element.Add(new XElement("mesh", new XAttribute("robot_id", node.RobotId)));
@@ -220,7 +220,7 @@ namespace SolidWorksAssetExporter.Core
             var projectPaths = new HashSet<string>((report.Files ?? new List<ManifestFile>()).Select(value => (value.Path ?? string.Empty).Replace('\\', '/')),
                 StringComparer.OrdinalIgnoreCase);
             if (projectPaths.Count != (report.Files ?? new List<ManifestFile>()).Count ||
-                projectPaths.Count(value => value.StartsWith("assembly_package_", StringComparison.OrdinalIgnoreCase) && value.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) != 1)
+                projectPaths.Count(value => value.StartsWith("assembly_", StringComparison.OrdinalIgnoreCase) && value.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) != 1)
                 throw new ValidationException("assembly_package report 必须声明一个 assembly XML，且文件路径不能重复。");
             foreach (var path in projectPaths.Where(value => value.StartsWith("meshes/", StringComparison.OrdinalIgnoreCase) && value.EndsWith("/model.step", StringComparison.OrdinalIgnoreCase)))
                 if (!projectPaths.Contains(path.Substring(0, path.Length - 4) + "stl")) throw new ValidationException("assembly_package 几何单元缺少 STL: " + path);
