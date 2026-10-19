@@ -106,7 +106,8 @@ class RobotDirectoryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="robot-reference-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name) / "robots"
+        # Windows TEMP may use an 8.3 alias; compare paths from the resolved root.
+        self.root = Path(self.temporary.name).resolve() / "robots"
         self.talos = self.root / "Talos"
         (self.talos / "meshes" / "simplified").mkdir(parents=True)
         (self.talos / "meshes" / "simplified" / "arm.stl").write_bytes(b"fixture mesh")
