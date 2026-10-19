@@ -91,7 +91,6 @@ namespace SolidWorksAssetExporter.Core
         public ICadNode Source { get; set; }
         public string GeometryUuid { get; set; }
         public string AssetId { get; set; }
-        public string RobotId { get; set; }
         public string MeshFile { get; set; }
         public IDictionary<string, string> Properties { get; set; }
         public IList<ExportNode> Children { get; private set; }

@@ -6,6 +6,8 @@
 
 本文是 Asset 属性的规范定义。资产识别、资产连接、资产使用、数据校验和后续扩展均以本协议为基础。
 
+Robot 的跨语言身份与路径解析以 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md) 为准；普通 Asset UUID 与 Wanxiang 发布契约不变。
+
 ## 1. 数据模型
 
 每个 Asset 由一组键值属性描述。属性在存储层均为字符串，Agent 必须按本协议声明的逻辑类型解释。
@@ -56,7 +58,7 @@ Agent 生成新数据时必须使用 `1` 或 `0`。
 | `QR_size` | string | 项目约定的尺寸表达 | 单个二维码的实体尺寸。协议不规定单位，单位由项目统一。 | `20mm` |
 | `QR_spacing` | number | 大于或等于 `0` | 多个二维码之间的间距。单位和测量基准由项目统一。 | `10` |
 | `设计原理` | string | 文本或空 | Asset 实现功能所采用的机械、电气或控制原理。 | `气缸驱动平行夹持` |
-| `设计目的` | string | 非空文本 | Asset 要解决的问题、目标和预期用途。Robot 使用该值作为 `robot_id` 名称段。 | `Hebe` |
+| `设计目的` | string | 非空文本 | Asset 要解决的问题、目标和预期用途。Robot 使用该值作为稳定 UUID 的机器人名称输入，不把原始名称直接写入引用。 | `Hebe` |
 | `升版说明` | string | 文本或空 | 当前版本相对上一版本的修改内容和原因。 | `调整夹指行程` |
 | `assembly_version` | integer | 大于 `0` | SOLIDWORKS assembly_package version; not an Asset content version. | `1` |
 
@@ -270,11 +272,13 @@ asset_version          = 1
 设计目的                 = Hebe
 ```
 
-由 `设计目的` 和 `asset_version` 组成 Robot 引用：
+Robot 节点保留 `kind="robot"`，在 `mesh` 上使用 `asset_id`；以下 UUID 由 `设计目的=Hebe` 按 Robot Asset 引用协议生成：
 
 ```text
-robot_id = Hebe:1
+asset_id = 4ce608df-8e9e-5a8b-b084-894b8da37409:1
 ```
+
+版本不进入 UUID 哈希。人工 NAS 目录保持 `robots/Hebe/v1/urdf/` 和 `robots/Hebe/meshes/`，网格引用由 URDF 负责。Robot 不生成普通 Asset 包，不调用 Wanxiang Asset 发布接口，不进入普通 `assets/` 注册表。
 
 ### 快换盘-上
 
@@ -413,5 +417,11 @@ Do not create an interface edge between `AdapterBase` and `RackAdapter` when tha
 - `asset_version` 表示同一 Asset 身份下的内容版本。
 - 首个版本为 `1`，后续内容变更依次增加。
 - `asset_version` 不用于生成 Asset UUID。
-- Robot 的引用格式固定为 `设计目的:asset_version`，例如 `Hebe:1`。
+- Robot 的引用格式固定为 `asset_id="<robot-uuid>:<asset_version>"`，节点为 `kind="robot"`。UUIDv5 使用 URL namespace `6ba7b811-9dad-11d1-80b4-00c04fd430c8`，名称输入为 `urn:solidworks-robot:v1:` 加规范化后的文件级 `设计目的`；不添加长度编码，版本不参与哈希。
 - `assembly_version` 只描述 SOLIDWORKS assembly_package（装配包）版本，不替代任何 Asset 的 `asset_version`。本地与 Wanxiang 远端均使用 `assembly_package/` 顶层目录。
+
+Robot 名称规范化必须依次使用协议固定的 Unicode `White_Space` 首尾裁剪、NFC、仅 ASCII `A-Z` 转小写；不得使用会改变非 ASCII 大小写的通用 `lower` 或 `casefold`。精确字符集合、测试向量与引用格式校验见 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md)。
+
+UUID 不可逆。消费者扫描 `robots/` 的直接名称子目录，逐一计算 UUID，保存 UUID 到原始名称目录的索引，再按引用版本定位 `robots/<原始名称>/vN/urdf/`；不得推测 `robots/<uuid>/...` 或把 meshes 移入版本目录。新增、改名或删除目录后必须刷新缓存；重复规范化名称、未知 UUID、缺失版本均应明确报错。参考实现为 [robot_asset_reference.py](../scripts/robot_asset_reference.py)，提供 `uuid NAME`、`index ROBOTS_ROOT`、`resolve ROBOTS_ROOT ASSET_ID` 命令。
+
+当前规则不兼容旧机器人引用格式。含 Robot 的已有 assembly_package 必须提升 `assembly_version` 后重新导出；这不改变普通 Asset 的身份或版本规则，也不表示远端消费者已经完成升级。

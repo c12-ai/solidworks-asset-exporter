@@ -4,6 +4,8 @@
 
 本协议定义资产有哪些属性、每个属性值表示什么，以及不同资产之间如何建立连接关系。后续资产定义、资产使用和资产数据检查均以本协议为基础。
 
+机器人名称 UUID、XML 引用与 NAS 目录解析遵循 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md)；普通 Asset 的身份算法和发布接口不变。
+
 ## 1. 基本属性
 
 | 属性 | 可以填写的值 | 含义 | 示例 |
@@ -13,7 +15,7 @@
 | `class` | `movable` / `robot` / `station` / `structure` | 资产的主要分类。 | `movable` |
 | `asset_version` | 从 `1` 开始的正整数 | 当前资产的内容版本。 | `1` |
 | `设计原理` | 文本 | 资产采用什么机械、电气或控制原理实现功能。 | `气缸驱动平行夹持` |
-| `设计目的` | 文本 | 资产要解决什么问题、实现什么用途。 | `夹持并转移压滤瓶` |
+| `设计目的` | 文本 | 资产要解决什么问题、实现什么用途。`class=robot` 时填写用于生成 UUID 的机器人名称。 | `夹持并转移压滤瓶`；Robot 填 `Hebe` |
 | `升版说明` | 文本 | 当前版本相对上一版本修改了什么。 | `调整夹指行程` |
 
 `class` 的含义：
@@ -153,11 +155,13 @@ asset_version          = 1
 设计目的                 = Hebe
 ```
 
-Robot 的标识示例：
+Robot 的 XML 引用示例如下，UUID 由名称 `Hebe` 按 Robot Asset 引用协议生成；节点仍使用 `kind="robot"`：
 
 ```text
-robot_id = Hebe:1
+asset_id = 4ce608df-8e9e-5a8b-b084-894b8da37409:1
 ```
+
+机器人资源由人工上传至 NAS 的 `robots/Hebe/v1/urdf/`，网格放在 `robots/Hebe/meshes/` 并由 URDF 引用。插件不导出机器人几何、URDF 或普通 Asset 包，不将机器人写入普通 `assets/` 注册表。目录保留原始名称，消费者扫描 `robots/` 的直接名称子目录建立 UUID 索引；UUID 不能反解为名称。
 
 ### 6.2 快换盘-上
 
@@ -377,10 +381,14 @@ asset_version = 2
 升版说明       = 增大夹指开口行程并调整限位结构
 ```
 
-Robot 使用 `设计目的` 和 `asset_version` 表示引用版本：
+Robot 的 UUID 仅由文件级 `设计目的` 中的名称生成，`asset_version` 单独表示引用版本。以下引用与第 6.1 节的 v1 使用相同 UUID：
 
 ```text
 设计目的       = Hebe
 asset_version = 2
-robot_id      = Hebe:2
+asset_id      = 4ce608df-8e9e-5a8b-b084-894b8da37409:2
 ```
+
+UUIDv5 namespace 为 `6ba7b811-9dad-11d1-80b4-00c04fd430c8`，名称输入为 `urn:solidworks-robot:v1:` 加规范化名称，不包含版本或长度编码。规范化固定为 Unicode `White_Space` 首尾裁剪、NFC、仅 ASCII `A-Z` 转小写；非 ASCII 大小写保留，精确字符集合见 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md)。名称规范化结果相同则 UUID 相同；名称改变且规范化结果不同时视为另一机器人身份。
+
+NAS 新增、改名或删除机器人目录后，消费者必须刷新 UUID 索引；重复规范化名称、未知 UUID 或缺失 `vN` 版本应报错，不能选择其他目录或版本代替。可使用 [Python 参考实现](../scripts/robot_asset_reference.py) 的 `uuid NAME`、`index ROBOTS_ROOT`、`resolve ROBOTS_ROOT ASSET_ID` 命令复核。不保留旧机器人引用格式；包含 Robot 的已有装配包应提升 `assembly_version` 后重新导出。

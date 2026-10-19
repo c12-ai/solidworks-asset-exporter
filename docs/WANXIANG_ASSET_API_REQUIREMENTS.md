@@ -2,14 +2,16 @@
 
 命名说明：SOLIDWORKS 插件在本地和 Wanxiang 远端均把当前总装配体的完整导出目录称为 `assembly_package`（装配包）。本地与远端顶层目录统一为 `assembly_package/`。
 
-本文记录 SOLIDWORKS Asset Exporter 与 `wanxiang-data-service` main 分支的当前对接契约。
+本文记录 SOLIDWORKS Asset Exporter 与 `wanxiang-data-service` 的普通 Asset 发布及装配包上传契约。
 同步基准：`bd2476c6426e79b2e3b53d532fb71de3b6f71886`（2026-09-03）。
+
+机器人引用按当前仓库的 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md) 更新；该协议描述导出端和消费者需共同遵守的规则，不表示上述服务端基准或实际部署已实现机器人解析。
 
 ## 1. 固定远端布局
 
 - Asset：`assets/<uuid>/v<version>/...`，只能通过资产原子发布接口写入。
 - assembly_package：保存到 `assembly_package/<assembly-uuid>/v<assembly-version>/...`，使用通用目录 ZIP 接口。
-- Robot：不进入 `assets/`；仅在 Project XML 中写 `<mesh robot_id="设计目的:asset_version" />`。
+- Robot：不进入 `assets/` 或其注册表；在装配包 XML 的 `kind="robot"` 节点写 `<mesh asset_id="<robot-uuid>:<version>" />`。资源由人工上传到 NAS 的 `robots/<原始名称>/vN/urdf/`，共享网格位于 `robots/<原始名称>/meshes/`，由 URDF 引用。
 - 客户端请求路径不再包含旧的共享目录前缀（例如 `wanxiang_test/`）。
 
 所有请求使用：
@@ -146,6 +148,14 @@ Content-Type: application/zip
 
 关闭“导出 assembly_package”后，不生成或上传 assembly_package；普通非 Robot Asset 的原子发布仍照常执行。
 
+### 4.1 Robot 资源解析
+
+Robot UUIDv5 仅由名称生成：使用 URL namespace `6ba7b811-9dad-11d1-80b4-00c04fd430c8`，name 输入为 `urn:solidworks-robot:v1:` 加规范化后的文件级“设计目的”，不包含版本或长度编码。规范化采用协议固定的 Unicode `White_Space` 首尾裁剪、NFC、仅 ASCII `A-Z` 转小写，保留非 ASCII 大小写。XML 的 `asset_id` 在 UUID 后追加 `:<asset_version>`；普通 Asset 的 UUID 算法与本接口响应格式保持不变。
+
+NAS 保留人工使用的名称目录。UUID 不可逆，消费者必须扫描 `robots/` 的直接名称子目录建立 UUID 索引，再用引用中的版本定位 `vN/urdf/`，网格路径由 URDF 解释。新增、改名或删除目录后必须刷新缓存；重复规范化名称、未知 UUID 或缺失版本应报错，不能回退到其他机器人或版本。规则和测试向量见 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md)，可用 [Python 参考实现](../scripts/robot_asset_reference.py) 的 `uuid NAME`、`index ROBOTS_ROOT`、`resolve ROBOTS_ROOT ASSET_ID` 命令验证。
+
+SOLIDWORKS 插件只导出引用，不发布 Robot 资源，不验证 NAS 内容，也不使用普通 Asset 注册表查找 Robot。新规则不保留旧机器人引用格式；已有含 Robot 装配包需要提升 `assembly_version` 后重新导出。消费端需单独部署上述解析支持。
+
 ## 5. 插件上传顺序
 
 1. 分类预览读取 `GET /asset/registry` 并完成版本、属性和包前置检查；
@@ -165,4 +175,4 @@ Asset 逐项发布的 200/201 都是成功。若中途失败，已成功发布�
 - assembly_package 写入 `/archive/assembly_package/...`；
 - 201 与 200 都显示成功，409 保留本地包并显示服务端错误；
 - `moveable`、空“零件名”、空“设计目的”在分类预览中一次性列出；
-- Robot 不发布 Asset，Project XML 中使用 `robot_id="Hebe:1"` 形式。
+- Robot 不发布普通 Asset，装配包 XML 保留 `kind="robot"` 并使用 `asset_id="<robot-uuid>:<version>"`；名称与 NAS 原始目录名按同一规范生成 UUID，消费者可解析到指定版本 URDF。

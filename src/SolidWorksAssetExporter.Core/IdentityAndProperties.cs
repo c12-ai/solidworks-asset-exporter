@@ -271,27 +271,16 @@ namespace SolidWorksAssetExporter.Core
                 "[movable]、[structure] 或 [station]（全小写、无首尾空格）。", modelName));
         }
 
-        public static string BuildRobotId(IDictionary<string, string> properties, string modelName)
+        public static string BuildRobotAssetId(IDictionary<string, string> properties, string modelName)
         {
-            var designPurpose = FirstNonBlank(properties, DesignPurpose);
-            if (string.IsNullOrWhiteSpace(designPurpose))
+            string designPurpose;
+            if (properties == null || !properties.TryGetValue(DesignPurpose, out designPurpose) ||
+                string.IsNullOrWhiteSpace(designPurpose))
                 throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                    "Robot 模型 [{0}] 必须填写文件级自定义属性 [设计目的]，用于生成 robot_id。",
+                    "Robot 模型 [{0}] 必须填写文件级自定义属性 [设计目的]，与 NAS robots 下的机器人目录名对应，用于生成 asset_id。",
                     modelName));
             var version = RequirePositiveInteger(properties, AssetVersion, modelName);
-            return designPurpose + ":" + version.ToString(CultureInfo.InvariantCulture);
-        }
-
-        private static string FirstNonBlank(IDictionary<string, string> properties, params string[] keys)
-        {
-            foreach (var key in keys)
-            {
-                string raw;
-                if (properties == null || !properties.TryGetValue(key, out raw)) continue;
-                var value = (raw ?? string.Empty).Trim();
-                if (!string.IsNullOrWhiteSpace(value)) return value;
-            }
-            return string.Empty;
+            return IdentityService.AssetId(IdentityService.RobotUuid(designPurpose), version);
         }
 
         public static int RequirePositiveInteger(IDictionary<string, string> properties, string key, string modelName)
@@ -334,6 +323,48 @@ namespace SolidWorksAssetExporter.Core
         private const string AssemblyPrefix = "urn:solidworks-project-assembly:v1:";
         private const string ProjectUnitPrefix = "urn:solidworks-project-unit:v1:";
         private const string NodePrefix = "urn:solidworks-export-node:v1:";
+        // Public wire protocol: docs/ROBOT_ASSET_REFERENCE_PROTOCOL.md.
+        public const string RobotPrefix = "urn:solidworks-robot:v1:";
+        private static readonly char[] RobotNameWhitespace = new[]
+        {
+            '\u0009', '\u000a', '\u000b', '\u000c', '\u000d', '\u0020', '\u0085', '\u00a0',
+            '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006',
+            '\u2007', '\u2008', '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000'
+        };
+
+        public static Guid RobotUuid(string name)
+        {
+            return Uuid5.Create(UrlNamespace, RobotPrefix + NormalizeRobotName(name));
+        }
+
+        public static string NormalizeRobotName(string name)
+        {
+            // Keep the rules independent of culture and runtime Unicode case tables.
+            // Only ASCII A-Z folds; every other character retains its NFC spelling.
+            var trimmed = (name ?? string.Empty).Trim(RobotNameWhitespace);
+            for (var index = 0; index < trimmed.Length; index++)
+            {
+                if (!char.IsSurrogate(trimmed[index])) continue;
+                if (!char.IsHighSurrogate(trimmed[index]) || index + 1 >= trimmed.Length ||
+                    !char.IsLowSurrogate(trimmed[index + 1]))
+                    throw new ValidationException("Robot 名称包含无效 Unicode 字符。");
+                index++;
+            }
+            string normalized;
+            try { normalized = trimmed.Normalize(NormalizationForm.FormC); }
+            catch (ArgumentException) { throw new ValidationException("Robot 名称包含无效 Unicode 字符。"); }
+            if (normalized.Length == 0 || normalized == "." || normalized == "..")
+                throw new ValidationException("Robot 名称必须是非空的单个 robots 子目录名称。");
+            var chars = normalized.ToCharArray();
+            for (var index = 0; index < chars.Length; index++)
+            {
+                var value = chars[index];
+                if (value == '/' || value == '\\' || char.IsControl(value))
+                    throw new ValidationException("Robot 名称不能包含路径分隔符或控制字符。");
+                if (value >= 'A' && value <= 'Z') chars[index] = (char)(value + ('a' - 'A'));
+            }
+            return new string(chars);
+        }
 
         public static Guid AssetUuid(ModelDescriptor model)
         {

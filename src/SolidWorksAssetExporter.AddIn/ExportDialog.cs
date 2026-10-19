@@ -67,7 +67,7 @@ namespace SolidWorksAssetExporter.AddIn
 
             AddLabel(layout, "Asset 本地输出根目录", 0); AddPathRow(layout, _assetRoot, 0);
             AddLabel(layout, "assembly_package 本地输出根目录", 1); _projectBrowse = AddPathRow(layout, _projectRoot, 1);
-            _exportProject.Text = "导出 assembly_package（装配包；Robot 仅写 robot_id 地址）";
+            _exportProject.Text = "导出 assembly_package（装配包；Robot 仅写 asset_id 地址）";
             _exportProject.AutoSize = true; _exportProject.Dock = DockStyle.Fill;
             layout.Controls.Add(_exportProject, 1, 2); layout.SetColumnSpan(_exportProject, 2);
             AddLabel(layout, "XML assembly_package mesh", 3);
@@ -88,7 +88,7 @@ namespace SolidWorksAssetExporter.AddIn
             _saveRegistryLocally.AutoSize = true; _saveRegistryLocally.Dock = DockStyle.Fill;
             layout.Controls.Add(_saveRegistryLocally, 1, 8); layout.SetColumnSpan(_saveRegistryLocally, 2);
 
-            var hint = new Label { Text = "本地与 Wanxiang 顶层目录统一为 assembly_package；Robot 仅在装配包 XML 中写 robot_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
+            var hint = new Label { Text = "本地与 Wanxiang 顶层目录统一为 assembly_package；Robot 仅在装配包 XML 中写 asset_id。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
             layout.Controls.Add(hint, 0, 9); layout.SetColumnSpan(hint, 3);
             _preview.Multiline = true; _preview.ReadOnly = true; _preview.ScrollBars = ScrollBars.Both; _preview.WordWrap = false;
             _preview.Font = new Font(FontFamily.GenericMonospace, 9f); _preview.Dock = DockStyle.Fill;

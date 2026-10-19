@@ -29,7 +29,7 @@ namespace SolidWorksAssetExporter.Core
                 result.Classification = ScanClassification.AssetBoundary;
                 if (PropertyRules.IsRobotClass(properties))
                 {
-                    PropertyRules.BuildRobotId(properties, node.Name);
+                    PropertyRules.BuildRobotAssetId(properties, node.Name);
                 }
                 else
                 {
@@ -117,7 +117,7 @@ namespace SolidWorksAssetExporter.Core
                 if (PropertyRules.IsRobotClass(scan.Properties))
                 {
                     node.Kind = ExportNodeKind.Robot;
-                    node.RobotId = PropertyRules.BuildRobotId(scan.Properties, scan.Source.Name);
+                    node.AssetId = PropertyRules.BuildRobotAssetId(scan.Properties, scan.Source.Name);
                     return node;
                 }
                 var assetUuid = IdentityService.AssetUuid(PlanningModel(scan.Source));
@@ -172,7 +172,7 @@ namespace SolidWorksAssetExporter.Core
             if (!ids.Add(node.Id)) throw new ValidationException("导出树包含重复节点 ID: [" + node.Id + "]。");
             if (node.Kind == ExportNodeKind.Group)
             {
-                if (!string.IsNullOrEmpty(node.AssetId) || !string.IsNullOrEmpty(node.RobotId) ||
+                if (!string.IsNullOrEmpty(node.AssetId) ||
                     !string.IsNullOrEmpty(node.MeshFile) || !string.IsNullOrEmpty(node.GeometryUuid))
                     throw new ValidationException("Group 节点不能包含 mesh 或几何标识。");
                 if (node.Children.Count == 0) throw new ValidationException("Group 节点必须包含子节点。");
@@ -186,12 +186,15 @@ namespace SolidWorksAssetExporter.Core
                     throw new ValidationException("assembly_package 几何节点缺少 mesh 文件。");
                 if (node.Kind == ExportNodeKind.Meshes && !exportProject && !string.IsNullOrWhiteSpace(node.MeshFile))
                     throw new ValidationException("未选择导出 assembly_package 时，装配包几何节点不能包含 mesh 文件。");
-                if (node.Kind == ExportNodeKind.Robot && string.IsNullOrWhiteSpace(node.RobotId))
-                    throw new ValidationException("Robot 节点缺少 robot_id。");
-                if (node.Kind == ExportNodeKind.Robot &&
-                    (!string.IsNullOrWhiteSpace(node.AssetId) || !string.IsNullOrWhiteSpace(node.MeshFile) ||
-                     !string.IsNullOrWhiteSpace(node.GeometryUuid)))
-                    throw new ValidationException("Robot 节点只能包含 robot_id 地址，不能包含 Asset 或几何文件引用。");
+                if (node.Kind == ExportNodeKind.Robot)
+                {
+                    if (string.IsNullOrWhiteSpace(node.AssetId))
+                        throw new ValidationException("Robot 节点缺少 asset_id。");
+                    if (!IsCanonicalRobotAssetId(node.AssetId))
+                        throw new ValidationException("Robot 节点 asset_id 必须为规范的小写 UUIDv5:正整数版本。");
+                    if (!string.IsNullOrWhiteSpace(node.MeshFile) || !string.IsNullOrWhiteSpace(node.GeometryUuid))
+                        throw new ValidationException("Robot 节点只能包含 asset_id 地址，不能包含几何文件引用。");
+                }
             }
             foreach (var child in node.Children)
             {
@@ -199,6 +202,21 @@ namespace SolidWorksAssetExporter.Core
                     throw new ValidationException("节点 parent_id 与树层级不一致。");
                 ValidateNode(child, ids, exportProject);
             }
+        }
+
+        private static bool IsCanonicalRobotAssetId(string assetId)
+        {
+            var separator = assetId.IndexOf(':');
+            if (separator != 36) return false;
+            var uuidText = assetId.Substring(0, separator);
+            Guid uuid;
+            int version;
+            if (!Guid.TryParseExact(uuidText, "D", out uuid) || uuidText[14] != '5' ||
+                "89ab".IndexOf(uuidText[19]) < 0 ||
+                !int.TryParse(assetId.Substring(separator + 1), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out version) || version <= 0)
+                return false;
+            return string.Equals(assetId, IdentityService.AssetId(uuid, version), StringComparison.Ordinal);
         }
     }
 }

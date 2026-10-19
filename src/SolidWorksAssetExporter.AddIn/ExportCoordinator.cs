@@ -321,7 +321,7 @@ namespace SolidWorksAssetExporter.AddIn
                 try
                 {
                     if (isRobot)
-                        PropertyRules.BuildRobotId(properties, node.Name);
+                        PropertyRules.BuildRobotAssetId(properties, node.Name);
                     else
                     {
                         ModelRules.ValidateExportable(model);
@@ -914,8 +914,10 @@ namespace SolidWorksAssetExporter.AddIn
                 plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture), plan.MeshFormat.ToString(),
                 plan.ExportProject ? "export-project" : "skip-project"));
             foreach (var node in Flatten(plan.Roots))
+                // Keep the retired robot identity field's empty slot so packages without
+                // Robot nodes retain their existing fingerprint material.
                 builder.Append(Canonical.Join(node.Id, node.ParentId, node.Name, node.Kind.ToString(),
-                    node.AssetId, node.RobotId, node.MeshFile,
+                    node.AssetId, string.Empty, node.MeshFile,
                     node.GeometryUuid, Number(node.Pose.Tx), Number(node.Pose.Ty), Number(node.Pose.Tz),
                     Number(node.Pose.Rotation.X), Number(node.Pose.Rotation.Y), Number(node.Pose.Rotation.Z), Number(node.Pose.Rotation.W)));
             return builder;
@@ -979,7 +981,7 @@ namespace SolidWorksAssetExporter.AddIn
                 builder.Append(exportProject ? "  [导出装配包 STEP/STL]" : "  [未选择导出 assembly_package]");
             if (node.Kind == ExportNodeKind.Robot)
                 builder.Append(exportProject
-                    ? "  [跳过 Asset/几何；assembly_package XML: robot_id=" + node.RobotId + "]"
+                    ? "  [跳过 Asset/几何；assembly_package XML: asset_id=" + node.AssetId + "]"
                     : "  [跳过 Asset；未选择导出 assembly_package]");
             builder.AppendLine();
             var children = node.Children.ToList();

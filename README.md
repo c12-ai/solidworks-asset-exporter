@@ -7,11 +7,13 @@
 - `Asset`：当前节点 `is_asset=true|1|yes`。这是硬终止边界，分类扫描不会读取其子节点，也不会在内部发现第二个 Asset。
 - `assembly_package geometry`：没有可继续拆分子节点的非 Asset 叶节点，作为装配包中的本地 STEP/STL 几何单元；XML 写为 `kind="meshes"`。
 - `Group`：自身不是 Asset，并且仍有可见、未抑制、非包络子节点。保留装配层级和位姿，没有 mesh，并继续向下拆分。
-- `Robot`：`is_asset=true` 且 `class=robot` 的硬边界。它不生成 Asset 包或几何，只在启用 assembly_package 导出时保留层级、位姿和 `robot_id` 地址。
+- `Robot`：`is_asset=true` 且 `class=robot` 的硬边界。它不生成 Asset 包或几何，只在启用 assembly_package 导出时以 `kind="robot"` 保留层级、位姿和 `asset_id="<robot-uuid>:<version>"` 引用。
 
 拆分只在 Asset 处停止。非 Asset 装配体无论后代是否包含 Asset 都会继续向下；最终非 Asset 叶节点作为装配包几何单元进入当前 assembly_package 目录，不污染全局 Asset 库。
 
 当前正式版本为 `v1.0.5`。
+
+当前源码的机器人引用规则以 [Robot Asset 引用协议](docs/ROBOT_ASSET_REFERENCE_PROTOCOL.md) 为准；下方 `v1.0.5` 升版说明保留历史发布行为，不表示旧引用格式仍受支持。
 
 ## 当前实现范围
 
@@ -25,18 +27,18 @@
 - XML 父子相对位姿、米、`qx/qy/qz/qw`、Asset ID 或 assembly_package 相对 mesh 路径。
 - Asset manifest、SHA-256、内容指纹、版本命中复用、同 ID 内容变化拒绝覆盖。
 - 只有装配体 Asset 调用 Pack and Go：零件 Asset 只复制自身 SLDPRT，assembly_package 几何单元不调用 Pack and Go。由于部分 SOLIDWORKS 会拒绝 `SetDocumentSaveToNames` 的过滤清单，装配体 Asset 的完整 Pack and Go 结果先写入当前导出事务内的隔离临时目录，随后只把 Asset 根及向下层级内明确收集的外部 SLDASM/SLDPRT 提升到最终 `source/models/`；父装配体、同级分支和上下文外部引用不会进入 manifest 或上传包，临时结果立即清理。`SavePackAndGo` 返回状态数组长度与原始依赖清单不一致时，不再仅凭数量误判失败，而是要求每个外部 Asset 目标文件实际存在后才提交。名称包含 `子组件^所属装配体` 或位于 SOLIDWORKS `VC~~/IC~~` 会话目录的虚拟组件保留在所属 SLDASM 内，不要求生成不存在的独立源文件；Asset 根本身若为虚拟组件则要求先保存为外部文件。
-- `class=robot`（忽略大小写和首尾空格）不作为 Asset 导出：不参与 Asset UUID、指纹、版本、manifest、注册或源文件打包，也不生成 STEP/STL。启用 assembly_package 导出时，Robot 仅在 XML 原层级和位姿处写入 `<mesh robot_id="设计目的:asset_version" />`；其他 `class` 的 Asset 与普通装配包几何流程不变。
+- `class=robot`（忽略大小写和首尾空格）不作为普通 Asset 导出：不参与普通 Asset UUID、内容指纹、版本注册、manifest 或源文件打包，也不生成 STEP/STL。启用 assembly_package 导出时，Robot 保留 `kind="robot"`，仅在 XML 原层级和位姿处写入 `<mesh asset_id="<robot-uuid>:<version>" />`。机器人 UUID 由文件级“设计目的”中的名称确定，版本单独使用正整数 `asset_version`；NAS 上的 URDF 和 meshes 由人工上传，插件不注册或上传这些资源。
 - 外部 Asset 组件已加载时会核对 `GetModelDoc2()` 文档路径与组件 SLDASM/SLDPRT 源路径；如果 SOLIDWORKS 返回了父装配文档，插件改为按 Asset 源路径获取正确文档。Pack and Go 前再次校验 Asset 根路径，防止把整机误打包进 Asset。
 - 为上述每个 SLDASM/SLDPRT 收集直接关联的 SLDDRW；只复制原始图纸，不生成 PDF，并与 SLDASM/SLDPRT 一起平铺到 Asset 的 `source/models/` 目录。
 - Asset 与 assembly_package 独立 staging，成功后目录级提交；既有版本不覆盖。
-- 分类预览会完成装配树分类，同时计算 Asset 与 assembly_package 内容指纹：Asset 立即对照 Wanxiang 注册表判断 `asset_version`，assembly_package 立即检查本地相同 UUID/`assembly_version` 的 `export-report.json`。取消“导出 assembly_package”后，不要求 `assembly_version`，也不计算或校验装配包指纹；Asset 预览、导出和注册仍照常执行。Robot 不进入 Asset/assembly_package 几何指纹队列；`robot_id` 直接由文件级“设计目的”和正整数 `asset_version` 以英文冒号拼接生成，例如 `Hebe:1`。任何版本冲突都在预览中显示并禁用“导出”，不会等到导出阶段才首次发现。属性缺失、模型读取、Asset 指纹和 assembly_package 指纹等可继续检查的问题会遍历完成后一次性汇总提示。预览会保留 Asset/assembly_package 指纹以及源文件/打开文档快照；点击导出时不再执行第二次完整分类或重新计算装配包指纹，只校验源文件大小与修改时间、会话内更新标记、活动配置、Wanxiang 最新 Asset 注册表及 assembly_package 本地版本状态，变化时要求重新预览。装配包几何指纹按“唯一源文件+配置”去重，重复装配实例不重复读取同一文件；几何单元直接使用持久 SHA-256 缓存，不调用 Pack and Go。导出窗口显示当前 Asset/assembly_package 阶段并可在单个 SOLIDWORKS 操作结束后取消。
+- 分类预览会完成装配树分类，同时计算 Asset 与 assembly_package 内容指纹：Asset 立即对照 Wanxiang 注册表判断 `asset_version`，assembly_package 立即检查本地相同 UUID/`assembly_version` 的 `export-report.json`。取消“导出 assembly_package”后，不要求 `assembly_version`，也不计算或校验装配包指纹；Asset 预览、导出和注册仍照常执行。Robot 不进入 Asset/assembly_package 几何指纹队列；其 `asset_id` 使用稳定的名称 UUID 加版本号，完整引用参与装配包指纹。任何版本冲突都在预览中显示并禁用“导出”，不会等到导出阶段才首次发现。属性缺失、模型读取、Asset 指纹和 assembly_package 指纹等可继续检查的问题会遍历完成后一次性汇总提示。预览会保留 Asset/assembly_package 指纹以及源文件/打开文档快照；点击导出时不再执行第二次完整分类或重新计算装配包指纹，只校验源文件大小与修改时间、会话内更新标记、活动配置、Wanxiang 最新 Asset 注册表及 assembly_package 本地版本状态，变化时要求重新预览。装配包几何指纹按“唯一源文件+配置”去重，重复装配实例不重复读取同一文件；几何单元直接使用持久 SHA-256 缓存，不调用 Pack and Go。导出窗口显示当前 Asset/assembly_package 阶段并可在单个 SOLIDWORKS 操作结束后取消。
 - 导出模型文档当前活动配置及显示状态，不切换配置或显示状态；导出后恢复选择和 STEP/STL 全局设置。
 - 几何、Pack and Go 和关联图纸操作统一按需获取模型文档，完成后关闭插件本次打开或临时激活的窗口。装配体引用件不再被强制以只读模式打开；`CloseDoc` 后仍注册在 SOLIDWORKS 时会调用 `QuitDoc`。父装配体可以继续把不可见、非只读的组件文档保留在内存中，这不再被误判为窗口关闭失败；总装以及用户原先已打开的模型窗口保持不变。
 - 可选在本地导出成功后直接上传到 [wanxiang-data-service](https://github.com/c12-ai/wanxiang-data-service)：每个 Asset 版本目录打成 ZIP 后，通过 Wanxiang 0.4.0 的 `PUT /asset/{uuid}/v{version}` 单次原子发布，请求头携带 `X-Content-Fingerprint`；本地 assembly_package 通过通用目录接口 `PUT /archive/assembly_package/{path}` 上传。插件不通过通用文件接口写 `assets/` 或注册表；请求使用 Bearer API key 并绕过开发机代理。
 - 上传顺序固定为 Asset 原子发布、Wanxiang assembly_package 上传。Asset 发布接口的 201 新注册和 200 幂等复用都视为成功；409 冲突不会留下半发布目录或改动注册表。只有启用“保存本地副本”时，发布完成后才通过 `GET /asset/registry` 下载服务端最终注册表并同步到本地。
 - 上传状态逐项显示 `Asset N/M`，Wanxiang assembly_package 分别显示打包、发送、收到 HTTP 响应和校验完成。每次上传都会在 `%LOCALAPPDATA%\SolidWorksAssetExporter\uploads` 创建独立日志，记录请求 URL、HTTP 状态码、耗时和截断后的响应摘要（不记录 API key）；插件界面可通过“查看上传日志”直接打开。上传请求使用完整响应读取，使 30 分钟 HTTP 超时同时覆盖请求体和响应体，避免服务端已处理但客户端无限等待响应结束。
 
-现有 74 项自动测试，包括 Asset 硬边界短路、父 Asset 跳过子属性、Asset UUID 仅由内部创建时间和文件名生成、配置特定属性完全忽略、必填 Asset 属性完整汇总、快换接口属性汇总校验与角色推导、Wanxiang 0.4.0 `class` 拼写校验、Asset 指纹版本复用/升级/重复内容判断、Robot 仅生成 assembly_package XML 地址引用、关闭 assembly_package 后跳过其本地/远端输出、需升版外部 Asset 自动打开且非只读、虚拟 Asset 根不作为升版文档打开、远端未注册的本地冲突包备份重建且不误报升版、预览纯文件系统图纸查找、原始 SLDDRW 与源模型同目录且不生成 PDF、未变化文件哈希缓存复用、零件 Asset 及装配包几何单元均不调用 Pack and Go、预览后源文件变化拒绝导出、Wanxiang `GET /asset/registry` 预览、默认不保存本地副本和逻辑空注册表、`PUT /asset/{uuid}/v{version}` 原子发布及 Asset→assembly_package 顺序、本地与远端 assembly_package 路径一致性、上传逐项进度、可读日志和不泄漏 API key 的 HTTP 响应诊断、轻化组件读取文件级 `is_asset=1`、同一源文件的重复实例只读取一次、已加载组件返回父装配文档时按源路径回退、虚拟/内嵌组件只在父装配中解析并恢复原轻化状态、Pack and Go 允许虚拟子组件不作为独立文件出现、Pack and Go 只在临时激活目标 Asset 子装配体后运行并恢复原窗口、Pack and Go 隔离 Asset 边界外上下文引用、Pack and Go 状态数组长度变化但 Asset 输出完整时继续提交、插件解析或配置恢复产生的 dirty 标志与后续用户模型修改相区分、完整元数据只读取文件级自定义属性、Wanxiang Bearer/URL/ZIP 契约、模型窗口所有权、避免强制只读、`QuitDoc` 关闭回退、父装配内存引用和激活警告；Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建，生产构建不会包含该 stub。
+现有 79 项 C# 自动测试，包括 Asset 硬边界短路、父 Asset 跳过子属性、Asset UUID 仅由内部创建时间和文件名生成、配置特定属性完全忽略、必填 Asset 属性完整汇总、快换接口属性汇总校验与角色推导、Wanxiang 0.4.0 `class` 拼写校验、Asset 指纹版本复用/升级/重复内容判断、Robot 仅生成 assembly_package XML 地址引用、关闭 assembly_package 后跳过其本地/远端输出、需升版外部 Asset 自动打开且非只读、虚拟 Asset 根不作为升版文档打开、远端未注册的本地冲突包备份重建且不误报升版、预览纯文件系统图纸查找、原始 SLDDRW 与源模型同目录且不生成 PDF、未变化文件哈希缓存复用、零件 Asset 及装配包几何单元均不调用 Pack and Go、预览后源文件变化拒绝导出、Wanxiang `GET /asset/registry` 预览、默认不保存本地副本和逻辑空注册表、`PUT /asset/{uuid}/v{version}` 原子发布及 Asset→assembly_package 顺序、本地与远端 assembly_package 路径一致性、上传逐项进度、可读日志和不泄漏 API key 的 HTTP 响应诊断、轻化组件读取文件级 `is_asset=1`、同一源文件的重复实例只读取一次、已加载组件返回父装配文档时按源路径回退、虚拟/内嵌组件只在父装配中解析并恢复原轻化状态、Pack and Go 允许虚拟子组件不作为独立文件出现、Pack and Go 只在临时激活目标 Asset 子装配体后运行并恢复原窗口、Pack and Go 隔离 Asset 边界外上下文引用、Pack and Go 状态数组长度变化但 Asset 输出完整时继续提交、插件解析或配置恢复产生的 dirty 标志与后续用户模型修改相区分、完整元数据只读取文件级自定义属性、Wanxiang Bearer/URL/ZIP 契约、模型窗口所有权、避免强制只读、`QuitDoc` 关闭回退、父装配内存引用和激活警告；Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建，生产构建不会包含该 stub。
 
 本项目已在 SOLIDWORKS Premium 2025 SP5.0 和官方 Interop 33.5.0.53 上完成生产构建、COM 安装与加载和命令打开验证。轻量化装配体按需文档生命周期、完整 STEP/STL、装配体 Asset Pack and Go 和 SLDDRW 产物仍需完成最终现场验收。SOLIDWORKS 2026 尚未实机验证。
 
@@ -46,6 +48,7 @@
 
 - [Asset Property Protocol（Agent 版）](docs/ASSET_PROPERTY_PROTOCOL_AGENT.md)：确定性的字段值域、属性语义、角色关系和示例。
 - [资产属性协议（工程师版）](docs/ASSET_PROPERTY_PROTOCOL.md)：面向工程师的属性含义、资产关系和示例。
+- [Robot Asset 引用协议](docs/ROBOT_ASSET_REFERENCE_PROTOCOL.md)：机器人名称 UUID、XML 引用及 NAS 目录解析的跨语言约定。
 
 在总装配体根模型设置：
 
@@ -84,9 +87,9 @@ asset_version = 1          # 必填正整数
 | `QR_num` | 非负整数 | 当前 Asset 上的二维码数量。没有二维码时填写 `0`；启用 `has_QRcode` 时应填写大于 `0` 的数量。 |
 | `QR_size` | 文本 | 单个二维码的实体尺寸，通常指正方形边长。当前模板没有规定单位或格式，项目内必须统一约定并保持一致。 |
 | `QR_spacing` | 非负数 | 多个二维码之间的间距。当前模板没有规定长度单位，也没有规定按边缘还是中心测量，项目内必须统一约定；只有一个二维码时填写 `0`。 |
-| `asset_version` | 正整数 | Asset 内容版本，从 `1` 开始。源模型、图纸或关键内容改变时必须提升版本，不能覆盖已经发布的同版本 Asset。`class=robot` 时直接作为 `robot_id` 冒号后的版本号。 |
+| `asset_version` | 正整数 | Asset 内容版本，从 `1` 开始。源模型、图纸或关键内容改变时必须提升版本，不能覆盖已经发布的同版本 Asset。`class=robot` 时作为 `asset_id` 冒号后的版本号并对应 NAS 的 `vN` 目录，不参与机器人 UUID 生成。 |
 | `设计原理` | 文本 | 说明该 Asset 实现功能所采用的机械、电气或控制原理。 |
-| `设计目的` | 文本 | 说明设计该 Asset 要解决的问题、目标和预期用途；`class=robot` 时直接作为 `robot_id` 第一段，例如 `Hebe`。 |
+| `设计目的` | 文本 | 说明设计该 Asset 要解决的问题、目标和预期用途；`class=robot` 时填写机器人名称，例如 `Hebe`，按 Robot Asset 引用协议生成稳定 UUID。该名称必须与 NAS 机器人目录名按同一规则规范化后的结果一致。 |
 | `升版说明` | 文本 | 说明当前版本相对上一版本的修改内容和升版原因；初始版本可填写“初始版本”。 |
 
 `class` 的建议含义：
@@ -130,11 +133,13 @@ asset_version = 1          # 必填正整数
 | 10 ml 试管 | `movable` | `connection_interface=试管-D20` |
 | 固定试管架/支架适配器 | `station` | `is_fixture=1`；永久固定时 `connection_interface` 留空；`accepts_interfaces=试管支架-A` 或 `试管-D20` |
 
-当前插件使用 `is_asset` 进行分类。所有 Asset（包括 Robot）在 `is_asset=true|1|yes` 时都要求正整数 `asset_version`；Robot 地址固定按“设计目的:asset_version”生成。只有勾选“导出 assembly_package”时才在总装配体上强制要求正整数 `assembly_version`。分类预览会一次性检查必填属性、布尔格式、快换侧别和角色所需接口；通过后，新字段原样保存到非 Robot Asset manifest。
+当前插件使用 `is_asset` 进行分类。所有 Asset（包括 Robot）在 `is_asset=true|1|yes` 时都要求正整数 `asset_version`；Robot 引用为 `asset_id="<robot-uuid>:<asset_version>"`，UUID 仅由文件级“设计目的”中的机器人名称生成。只有勾选“导出 assembly_package”时才在总装配体上强制要求正整数 `assembly_version`。分类预览会一次性检查必填属性、布尔格式、快换侧别和角色所需接口；通过后，新字段原样保存到非 Robot Asset manifest。
 
 同一 `uuid + asset_version` 的源模型及图纸内容完全一致时，插件会校验现有文件并直接复用旧 Asset；如果内容已经变化，则拒绝用同一个版本号覆盖，必须提升 `asset_version`。Asset 注册信息以 Wanxiang 注册表为准；本地 Asset 地址由输出根目录、UUID 和版本确定，每个版本目录中的 manifest 是该 Asset 的文件与哈希记录。
 
 Asset UUIDv5 v2 的输入严格限定为 SOLIDWORKS 内部创建时间和文件名（含扩展名）。绝对路径、配置、显示状态、文件内容和 `asset_version` 不参与 UUID，因此移动目录、切换配置或正常升版不会改变资产身份；重命名文件或内部创建时间不同会得到新 UUID。同一源文件的多个装配实例保留各自 XML 节点和位姿，但共享同一个 `asset_id`，Asset 包只创建或复用一次。`asset_id` 是 `<uuid>:<version>`，只出现在装配 XML；manifest 内只保存独立的 `uuid` 和 `version`。v1.0.5 起使用 v2 身份前缀，因此更早插件生成的 UUID 不会与新规则混用；旧注册项保留但不会被误认为新身份的当前版本。
+
+Robot 使用独立的 UUIDv5 名称规则：namespace 为 `6ba7b811-9dad-11d1-80b4-00c04fd430c8`，哈希名称为 `urn:solidworks-robot:v1:` 加规范化后的机器人名称，不添加长度编码。规范化依次执行协议固定的 Unicode `White_Space` 首尾裁剪、NFC、仅 ASCII `A-Z` 转小写；非 ASCII 字母保留大小写。版本不参与哈希，升版只改变 `asset_id` 冒号后的正整数。普通 Asset 的 UUID 规则保持上述 v2 算法。
 
 Asset 的 `content_fingerprint` 分两层计算：先对 Asset 根模型及其边界内所有未抑制的 SLDASM/SLDPRT，按“文件名、文件长度、文件 SHA-256”排序后与根模型身份种子一起计算模型指纹；再把每个模型同目录、同名的直接关联 SLDDRW 按“文件名、文件 SHA-256”排序加入，得到最终内容指纹。因此，只要保存操作改变了上述任一源模型/图纸的字节，或者增删、重命名、抑制/解除抑制这些文件，指纹都会变化。根模型当前配置或显示状态变化也会改变指纹。修改几何、尺寸、材料或自定义属性并保存，通常都会因为 SLD 文件内容改变而要求新版本。
 
@@ -188,7 +193,7 @@ assembly_package/
 ```
 
 assembly_package 几何单元永远同时生成 STEP 和 STL；窗口中的格式选项只决定 XML 的 `mesh file` 引用哪个格式。装配包不生成 SLDPRT/SLDASM、SLDDRW、PDF 或 Asset manifest。
-Robot 节点不属于 assembly_package 几何单元，因此不会出现在 `meshes/` 中；开启 assembly_package 时只在 XML 中写 `robot_id`。
+Robot 节点不属于 assembly_package 几何单元，因此不会出现在装配包的 `meshes/` 中；开启 assembly_package 时在 `kind="robot"` 节点中写 `mesh asset_id="<robot-uuid>:<version>"`。
 
 ## Wanxiang 数据服务与注册表
 
@@ -210,7 +215,29 @@ assembly_package/
 
 分类预览固定调用 `GET /asset/registry`；注册表尚不存在时服务返回逻辑空表及 `X-Registry-Exists: false`。每个 Asset 版本通过 `PUT /asset/{uuid}/v{version}` 上传完整 ZIP，并在 `X-Content-Fingerprint` 中发送 manifest 指纹；服务端校验 manifest、必需文件、大小和 SHA-256 后一次性提交版本目录与注册表。本地 assembly_package 使用 `PUT /archive/assembly_package/...` 上传到同名远端顶层目录。网络或服务端失败不会删除本地导出结果；相同包可幂等重试，409 冲突必须重新预览或修改 `asset_version`。
 
-Robot 不调用 `PUT /asset/{uuid}/v{version}`。它只作为 assembly_package XML 中的 `robot_id="设计目的:asset_version"` 地址引用；本地和上传后的 XML 内容保持一致。
+Robot 不调用 `PUT /asset/{uuid}/v{version}`，不进入普通 `assets/` 注册表。它只作为 assembly_package XML 中 `kind="robot"` 节点的 `asset_id="<robot-uuid>:<version>"` 引用；本地和上传后的 XML 内容保持一致。
+
+机器人资源人工上传到 NAS，目录保留原始名称。示例布局：
+
+```text
+robots/
+  Hebe/
+    v1/urdf/
+    v2/urdf/
+    meshes/
+```
+
+URDF 自己引用 `robots/Hebe/meshes/` 中的网格；消费者不能把它改为 `robots/<uuid>/...` 或假定 meshes 位于版本目录。UUID 不可逆，消费者须扫描 `robots/` 的直接名称子目录，使用同一算法建立 UUID 到原始名称目录的索引，再定位 `vN/urdf/`。新增、改名或删除目录后必须刷新缓存；重复规范化名称、未知 UUID、缺失版本必须报错。插件不连接 NAS 校验这些资源，也不代表 Wanxiang 消费端已部署解析支持。
+
+仓库提供 [Python 参考实现](scripts/robot_asset_reference.py)，在仓库根目录执行，`ROBOTS_ROOT` 替换为实际 `robots/` 目录：
+
+```sh
+python3 scripts/robot_asset_reference.py uuid Hebe
+python3 scripts/robot_asset_reference.py index ROBOTS_ROOT
+python3 scripts/robot_asset_reference.py resolve ROBOTS_ROOT 4ce608df-8e9e-5a8b-b084-894b8da37409:1
+```
+
+完整规范及跨语言测试向量见 [Robot Asset 引用协议](docs/ROBOT_ASSET_REFERENCE_PROTOCOL.md)。更新前已有含 Robot 的装配包需要提升 `assembly_version` 后重新导出；不保留旧机器人引用格式。
 
 XML 示例：
 
@@ -231,7 +258,7 @@ XML 示例：
     </node>
     <node id="..." parent_id="..." name="Robot-1" kind="robot">
       <pose tx="0" ty="0" tz="0" qx="0" qy="0" qz="0" qw="1" />
-      <mesh robot_id="Hebe:1" />
+      <mesh asset_id="4ce608df-8e9e-5a8b-b084-894b8da37409:1" />
     </node>
   </nodes>
 </assembly>
@@ -240,6 +267,12 @@ XML 示例：
 Asset、装配包几何节点都是叶节点；Group 没有 mesh。装配包几何节点统一序列化为 `kind="meshes"`，不产生 `kind="project"` 或单数 `kind="mesh"`。XML 不输出 joint、轴或关节类型。混合拆分时至少要有一个可见、未抑制、非包络的固定顶层组件，并把固定组件优先写入节点序列，但不会把真实位姿归零。
 
 ## 构建与测试
+
+机器人 UUID 和 NAS 参考解析器另有 20 项 Python 标准库测试（Python 3.8+，无需第三方依赖），已接入 CI：
+
+```sh
+python -B -m unittest discover -s tests -p test_robot_asset_reference.py -v
+```
 
 正式发布按以下顺序执行。核心测试和契约验证不需要安装 SOLIDWORKS；生产构建使用仓库内的官方 Interop：
 
@@ -261,6 +294,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\new-release-package.ps1 -Vers
 ## 安装与卸载
 
 ### v1.0.5 升版说明
+
+本节记录 `v1.0.5` 的历史发布行为；机器人引用现已更新，当前源码以 [Robot Asset 引用协议](docs/ROBOT_ASSET_REFERENCE_PROTOCOL.md) 为准。
 
 - SOLIDWORKS 本地整机导出统一命名为 `assembly_package`（装配包），工具菜单、导出窗口、分类预览、错误提示和本地报告说明同步更新。
 - Wanxiang 顶层目录由 `projects/` 改为 `assembly_package/`，上传目标同步改为 `PUT /archive/assembly_package/...`；已有 `settings.json` 兼容配置键保持不变。
@@ -341,7 +376,7 @@ powershell -ExecutionPolicy Bypass -File .\Install-CustomPropertyTemplates.ps1 -
 8. 在两个导出模型中检查原点；用 XML 位姿重建装配并与 SOLIDWORKS 比较。
 9. 零件 Asset 的 `source/models/` 只包含自身 SLDPRT 及直接关联 SLDDRW；装配体 Asset 只包含根及向下层级内的 SLDASM/SLDPRT/SLDDRW，且能在隔离目录打开；确认父装配体、同级分支和 assembly_package 文件均未混入。
 10. 检查 Asset 根模型及层级内每个子装配体、零件直接关联的 SLDDRW 均与源模型位于同一 `source/models/` 目录，并确认没有生成 PDF、无关图纸没有被导出。
-11. 设置 `class=robot`、文件级“设计目的”和正整数 `asset_version`，重新预览和导出；确认没有生成或注册任何 Robot Asset，也没有 Robot STEP/STL，assembly_package XML 保留原层级/位姿并只写 `mesh robot_id="设计目的:asset_version"`，例如 `Hebe:1`。其他 class 仍按第 9、10 项打包。
+11. 设置 `class=robot`、文件级“设计目的”和正整数 `asset_version`，重新预览和导出；确认 Robot 没有生成普通 Asset 包或注册记录，也没有 Robot STEP/STL，assembly_package XML 保留 `kind="robot"`、原层级/位姿，并写 `mesh asset_id="<robot-uuid>:<version>"`。用参考脚本确认名称 UUID 与 XML 一致，消费者能通过 NAS 原始名称目录索引定位版本 URDF；Robot 升版不改变 UUID。其他 class 仍按第 9、10 项打包。
 12. 人工制造中途失败，确认 staging 被清理且既有版本目录未被覆盖。
 13. 导出前后确认模型活动配置和显示状态未被切换，并确认选择和 STEP/STL 系统选项已恢复。
 

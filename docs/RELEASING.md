@@ -1,5 +1,7 @@
 # v1.0.5 发布教程
 
+本文保留 `v1.0.5` 发布流程与历史说明。当前源码的机器人引用规则已更新，以 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md) 为准；发布后续版本时应使用新规则验收，不沿用下方历史格式。
+
 ## 1. 发布前检查
 
 发布必须从已经合并并通过 CI 的 `main` 创建，不能直接从尚未合并的功能分支打标签：
@@ -102,7 +104,7 @@ Release 标题使用：
 SolidWorks Asset Exporter v1.0.5
 ```
 
-升版说明：
+`v1.0.5` 历史升版说明：
 
 - SOLIDWORKS 本地整机导出统一命名为 `assembly_package`（装配包），界面、预览、错误提示、README 和属性协议同步更新。
 - 本地与 Wanxiang 远端顶层目录统一为 `assembly_package/`，上传目标为 `PUT /archive/assembly_package/...`；已有 `settings.json` 兼容配置键保持不变。装配 XML 根属性使用 `mesh_format`，普通几何节点统一使用复数 `kind="meshes"`，不输出 `project_mesh_format`、`kind="project"` 或单数 `kind="mesh"`。
@@ -122,7 +124,9 @@ SolidWorks Asset Exporter v1.0.5
 - 安装程序自动为当前桌面用户启用 Add-in。
 - 发布构建隔离契约测试桩，并在生成 ZIP 前校验真实 SOLIDWORKS Interop，避免无效 Add-in DLL 被分发。
 
-Robot 不调用 Wanxiang Asset 发布接口；assembly_package 消费端需要支持 `<mesh robot_id="设计目的:asset_version" />` 地址引用，例如 `<mesh robot_id="Hebe:1" />`。
+上述 `robot_id` 是 `v1.0.5` 的历史发布行为。当前源码保留 `kind="robot"`，改用 `<mesh asset_id="<robot-uuid>:<version>" />`；不保留旧机器人引用格式。Robot 不调用 Wanxiang Asset 发布接口，不进入普通 `assets/` 注册表，NAS 资源仍人工维护为 `robots/<原始名称>/vN/urdf/` 和 `robots/<原始名称>/meshes/`，网格由 URDF 自己引用。
+
+发布后续版本前，应按 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md) 检查名称 UUID 跨语言一致性、消费者的原始名称目录索引与刷新、重复名称冲突、未知 UUID、缺失版本报错，以及已有含 Robot 装配包升 `assembly_version` 后重新导出。可用 [Python 参考实现](../scripts/robot_asset_reference.py) 的 `uuid NAME`、`index ROBOTS_ROOT`、`resolve ROBOTS_ROOT ASSET_ID` 命令复核。修改仓库文档或导出插件不代表 Wanxiang 消费端已完成升级。
 
 ## 6. 发布后验收
 

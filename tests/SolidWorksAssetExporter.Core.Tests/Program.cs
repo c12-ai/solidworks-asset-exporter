@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -46,6 +47,11 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
             Run("XML has leaf mesh references", XmlLeafReferences);
             Run("Robot is an assembly_package XML reference and never an Asset", RobotIsProjectReference);
+            Run("Robot UUID matches the published name protocol", RobotUuidMatchesPublishedProtocol);
+            Run("Robot identity is stable across versions and repeated instances", RobotIdentityIsStableAcrossVersionsAndInstances);
+            Run("Robot references reject invalid names, versions and legacy IDs", RobotReferencesRejectInvalidInputs);
+            Run("Non-Robot package fingerprint retains its existing layout", NonRobotPackageFingerprintIsUnchanged);
+            Run("Robot reference migration requires a new package version", RobotReferenceMigrationRequiresNewPackageVersion);
             Run("assembly_package export can be disabled", ProjectExportCanBeDisabled);
             Run("Manifest validates hashes and conflicts", ManifestValidation);
             Run("Robot Asset is metadata only", RobotAssetIsMetadataOnly);
@@ -876,6 +882,8 @@ namespace SolidWorksAssetExporter.Core.Tests
         {
             var model = Descriptor("identity");
             var original = IdentityService.AssetUuid(model);
+            Equal("2768df38-f8e2-5fc7-b570-c3152d15df7c", original.ToString("D"));
+            Equal("2768df38-f8e2-5fc7-b570-c3152d15df7c:2", IdentityService.AssetId(original, 2));
             model.Configuration = "Another configuration";
             model.DisplayState = "Another display state";
             model.DocumentKind = DocumentKind.Part;
@@ -1068,8 +1076,7 @@ namespace SolidWorksAssetExporter.Core.Tests
                 ProjectMeshFormat.Step, true);
             var node = plan.Roots.Single();
             Equal(ExportNodeKind.Robot, node.Kind);
-            Equal("Hebe:1", node.RobotId);
-            True(string.IsNullOrEmpty(node.AssetId));
+            Equal("4ce608df-8e9e-5a8b-b084-894b8da37409:1", node.AssetId);
             True(string.IsNullOrEmpty(node.GeometryUuid));
             True(string.IsNullOrEmpty(node.MeshFile));
             Equal(0, robot.GetChildrenCalls);
@@ -1081,9 +1088,170 @@ namespace SolidWorksAssetExporter.Core.Tests
                 AssemblyXmlWriter.Write(path, plan);
                 var element = XDocument.Load(path).Descendants("node").Single();
                 Equal("robot", (string)element.Attribute("kind"));
-                Equal("Hebe:1", (string)element.Element("mesh").Attribute("robot_id"));
-                True(element.Element("mesh").Attribute("asset_id") == null);
+                Equal("4ce608df-8e9e-5a8b-b084-894b8da37409:1", (string)element.Element("mesh").Attribute("asset_id"));
+                True(element.Element("mesh").Attribute("robot_id") == null);
                 True(element.Element("mesh").Attribute("file") == null);
+            }
+            finally { Directory.Delete(temp, true); }
+        }
+
+        private static void RobotUuidMatchesPublishedProtocol()
+        {
+            // Fixed vectors also used by the independent downstream Python implementation.
+            Equal("be210481-a11b-5fb2-8002-bf9bd0b9afdb", IdentityService.RobotUuid("Talos").ToString("D"));
+            Equal("4ce608df-8e9e-5a8b-b084-894b8da37409", IdentityService.RobotUuid("Hebe").ToString("D"));
+            Equal("talos", IdentityService.NormalizeRobotName("\u00a0TaLoS\u2003"));
+            Equal(IdentityService.RobotUuid("Talos"), IdentityService.RobotUuid("\u00a0TaLoS\u2003"));
+            Equal("ab40490a-e945-5e15-a365-38704430a7d8", IdentityService.RobotUuid("e\u0301").ToString("D"));
+            Equal("834a7fbc-3c74-595a-aa63-bc1d5aac6d57", IdentityService.RobotUuid("\u00c9").ToString("D"));
+            Equal("45d5373c-3bc3-5651-92b2-9c4eddfb990c", IdentityService.RobotUuid("机器人").ToString("D"));
+            Equal("071cc8ff-46f2-5ce7-b399-6a8a7a78ec15", IdentityService.RobotUuid("机器人\ud83e\udd16").ToString("D"));
+            True(IdentityService.RobotUuid("Talos") != IdentityService.RobotUuid("Hebe"));
+        }
+
+        private static void RobotIdentityIsStableAcrossVersionsAndInstances()
+        {
+            var root = Root();
+            var first = Node("Talos-first", true, true);
+            var second = Node("Talos-second", false, true);
+            first.Model.InternalCreationTime = string.Empty;
+            second.Model.InternalCreationTime = "another-file-creation-time";
+            second.WorldTransformValue = Translate(2, 3, 4);
+            MarkRobot(first, "Talos", 1);
+            MarkRobot(second, " TALOS ", 1);
+            root.Add(first, second);
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+            Equal(2, plan.Roots.Count);
+            True(plan.Roots.All(node => node.Kind == ExportNodeKind.Robot));
+            Equal(plan.Roots[0].AssetId, plan.Roots[1].AssetId);
+            True(plan.Roots[0].Id != plan.Roots[1].Id);
+            Near(2, plan.Roots[1].Pose.Tx);
+            Near(3, plan.Roots[1].Pose.Ty);
+            Near(4, plan.Roots[1].Pose.Tz);
+
+            second.Model.FileProperties[PropertyRules.AssetVersion] = "2";
+            Equal("be210481-a11b-5fb2-8002-bf9bd0b9afdb:2",
+                PropertyRules.BuildRobotAssetId(second.Model.FileProperties, second.Name));
+            Equal("be210481-a11b-5fb2-8002-bf9bd0b9afdb:1",
+                PropertyRules.BuildRobotAssetId(first.Model.FileProperties, first.Name));
+        }
+
+        private static void RobotReferencesRejectInvalidInputs()
+        {
+            foreach (var invalidName in new[] { "", " \u00a0 ", ".", "..", "Talos/Other", "Talos\\Other", "Ta\0los", "Ta\u001flos", "\ud800", "\udc00", "Ta\ud800los" })
+                Throws<ValidationException>(() => IdentityService.RobotUuid(invalidName));
+
+            var root = Root();
+            var robot = Node("robot", true, true);
+            MarkRobot(robot, "Talos", 1);
+            root.Add(robot);
+            foreach (var invalidVersion in new[] { "", "0", "-1", "1.5", "v1", "2147483648" })
+            {
+                robot.Model.FileProperties[PropertyRules.AssetVersion] = invalidVersion;
+                Throws<ValidationException>(() => new ExportPlanBuilder().Build(
+                    new AssemblyScanner().Scan(root), ProjectMeshFormat.Step));
+            }
+            robot.Model.FileProperties[PropertyRules.AssetVersion] = "1";
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+            var node = plan.Roots.Single();
+            var validId = node.AssetId;
+            foreach (var invalidId in new[] { "Talos:1", "", validId.Replace(":1", ":0"),
+                validId.Replace(":1", ":01"), validId.Replace(":1", ":2147483648"), validId.ToUpperInvariant() })
+            {
+                node.AssetId = invalidId;
+                Throws<ValidationException>(() => ExportPlanValidator.Validate(plan));
+            }
+            node.AssetId = validId;
+            node.MeshFile = "meshes/robot/model.step";
+            Throws<ValidationException>(() => ExportPlanValidator.Validate(plan));
+            node.MeshFile = null;
+            node.GeometryUuid = "33333333-3333-5333-8333-333333333333";
+            Throws<ValidationException>(() => ExportPlanValidator.Validate(plan));
+            node.GeometryUuid = null;
+            ExportPlanValidator.Validate(plan);
+        }
+
+        private static AssemblyExportPlan FingerprintFixture(ExportNodeKind kind, string assetId, string geometryUuid)
+        {
+            var plan = new AssemblyExportPlan
+            {
+                AssemblyUuid = "11111111-1111-5111-8111-111111111111", AssemblyVersion = 1,
+                MeshFormat = ProjectMeshFormat.Step, ExportProject = true
+            };
+            plan.Roots.Add(new ExportNode
+            {
+                Id = "22222222-2222-5222-8222-222222222222", ParentId = string.Empty,
+                Name = "fixture", Kind = kind, AssetId = assetId, GeometryUuid = geometryUuid,
+                Pose = Pose.FromTransform(Matrix4.Identity)
+            });
+            return plan;
+        }
+
+        private static string PlanFingerprint(AssemblyExportPlan plan)
+        {
+            return (string)typeof(ExportCoordinator).GetMethod("CalculatePlanFingerprint",
+                BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { plan });
+        }
+
+        private static string ProjectFingerprint(AssemblyExportPlan plan)
+        {
+            return (string)typeof(ExportCoordinator).GetMethod("CalculateProjectFingerprint",
+                BindingFlags.Static | BindingFlags.NonPublic).Invoke(null,
+                    new object[] { plan, new Dictionary<string, string>() });
+        }
+
+        private static void NonRobotPackageFingerprintIsUnchanged()
+        {
+            var plan = FingerprintFixture(ExportNodeKind.Asset,
+                "33333333-3333-5333-8333-333333333333:1", "33333333-3333-5333-8333-333333333333");
+            // Baseline includes the original empty RobotId position in the serialized material.
+            const string baseline = "edb1d7d5a7046dadb6906e7a2b60ca0ae3c0ee137be96a0e3956d7aa1c73dc09";
+            Equal(baseline, PlanFingerprint(plan));
+            Equal(baseline, ProjectFingerprint(plan));
+        }
+
+        private static void RobotReferenceMigrationRequiresNewPackageVersion()
+        {
+            var plan = FingerprintFixture(ExportNodeKind.Robot,
+                "be210481-a11b-5fb2-8002-bf9bd0b9afdb:1", null);
+            // Same fixture before migration: AssetId empty; RobotId was Talos:1.
+            const string legacyFingerprint = "43b807e70807d95f39fb167e367163f1917a4df0a69c42d05391e86968dfa5e4";
+            var fingerprint = ProjectFingerprint(plan);
+            True(legacyFingerprint != fingerprint);
+            True(legacyFingerprint != PlanFingerprint(plan));
+            Equal(fingerprint, ProjectFingerprint(plan));
+
+            var temp = TempDirectory();
+            try
+            {
+                var oldDirectory = Path.Combine(temp, plan.AssemblyUuid, "v1");
+                Directory.CreateDirectory(oldDirectory);
+                var oldXmlName = "assembly_" + plan.AssemblyUuid + "_v1.xml";
+                File.WriteAllText(Path.Combine(oldDirectory, oldXmlName),
+                    "<assembly><node kind=\"robot\"><mesh robot_id=\"Talos:1\" /></node></assembly>");
+                JsonFile.Write(Path.Combine(oldDirectory, "export-report.json"), new ExportReport
+                {
+                    SchemaVersion = "1.0", AssemblyUuid = plan.AssemblyUuid, AssemblyVersion = 1,
+                    ContentFingerprint = legacyFingerprint,
+                    Files = AssetManifestValidator.DescribeFiles(oldDirectory, new[] { oldXmlName })
+                });
+                Throws<ValidationException>(() => ProjectReportValidator.Inspect(oldDirectory,
+                    plan.AssemblyUuid, 1, fingerprint));
+
+                plan.AssemblyVersion = 2;
+                var newDirectory = Path.Combine(temp, plan.AssemblyUuid, "v2");
+                Directory.CreateDirectory(newDirectory);
+                var newXmlName = "assembly_" + plan.AssemblyUuid + "_v2.xml";
+                AssemblyXmlWriter.Write(Path.Combine(newDirectory, newXmlName), plan);
+                var newFingerprint = ProjectFingerprint(plan);
+                JsonFile.Write(Path.Combine(newDirectory, "export-report.json"), new ExportReport
+                {
+                    SchemaVersion = "1.0", AssemblyUuid = plan.AssemblyUuid, AssemblyVersion = 2,
+                    ContentFingerprint = newFingerprint,
+                    Files = AssetManifestValidator.DescribeFiles(newDirectory, new[] { newXmlName })
+                });
+                Equal(ExistingProjectState.Reusable, ProjectReportValidator.Inspect(newDirectory,
+                    plan.AssemblyUuid, 2, ProjectFingerprint(plan)));
             }
             finally { Directory.Delete(temp, true); }
         }

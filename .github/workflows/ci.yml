@@ -16,6 +16,9 @@ jobs:
       - name: Run core tests
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-core.ps1 -Configuration Release
+      - name: Test Robot UUID and NAS resolver reference
+        shell: powershell
+        run: python -B -m unittest discover -s tests -p test_robot_asset_reference.py -v
       - name: Build production add-in with bundled Interop assemblies
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-addin.ps1 -Configuration Release
