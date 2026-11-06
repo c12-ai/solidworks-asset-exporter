@@ -89,6 +89,15 @@ namespace SolidWorksAssetExporter.AddIn
 
             try
             {
+                // Validate before the first HTTP publication, including relations hashes and
+                // identity. A file changed after local export must not enter the upload ZIP.
+                if (settings.ExportProject)
+                {
+                    if (string.IsNullOrWhiteSpace(localExport.ProjectDirectory))
+                        throw new ValidationException("本地导出结果缺少装配包目录。");
+                    var report = JsonFile.Read<ExportReport>(Path.Combine(localExport.ProjectDirectory, "export-report.json"));
+                    ProjectReportValidator.Inspect(localExport.ProjectDirectory, report.AssemblyUuid, report.AssemblyVersion, report.ContentFingerprint);
+                }
                 var assetDirectories = new HashSet<string>((localExport.AssetDirectories ?? new List<string>())
                     .Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
                 var registrations = (localExport.AssetRegistrations ?? new List<AssetRegistration>())

@@ -29,6 +29,7 @@
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="SolidWorks.Interop.sldworks" Condition=" '$(UseSolidWorksStubs)' != 'true' ">
       <HintPath>$(SolidWorksInteropDir)\SolidWorks.Interop.sldworks.dll</HintPath><EmbedInteropTypes>false</EmbedInteropTypes>
@@ -52,6 +53,12 @@
     <Compile Include="ExportDialog.cs" />
     <Compile Include="Settings.cs" />
     <Compile Include="SwAddin.cs" />
+    <Compile Include="SwInstanceBindings.cs" />
+    <Compile Include="InstanceBindingDialog.cs" />
+    <Compile Include="BindingEditorState.cs" />
+    <Compile Include="InterfaceEditing.cs" />
+    <Compile Include="SwInterfaceProperties.cs" />
+    <Compile Include="InterfacePropertiesDialog.cs" />
     <Compile Include="SwCadNode.cs" />
     <Compile Include="SwDocumentWindowScope.cs" />
     <Compile Include="SwExportServices.cs" />

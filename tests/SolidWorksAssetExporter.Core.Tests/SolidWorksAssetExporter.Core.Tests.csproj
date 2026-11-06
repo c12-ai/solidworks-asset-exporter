@@ -36,6 +36,13 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="InstanceBindingTests.cs" />
+    <Compile Include="BindingEditorTests.cs" />
+    <Compile Include="InterfaceEditingTests.cs" />
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\InterfaceEditing.cs"><Link>AddIn\InterfaceEditing.cs</Link></Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\SwInterfaceProperties.cs"><Link>AddIn\SwInterfaceProperties.cs</Link></Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\BindingEditorState.cs"><Link>AddIn\BindingEditorState.cs</Link></Compile>
+    <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\SwInstanceBindings.cs"><Link>AddIn\SwInstanceBindings.cs</Link></Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="..\..\src\SolidWorksAssetExporter.AddIn\InteropStubs.cs">
       <Link>AddIn\InteropStubs.cs</Link>

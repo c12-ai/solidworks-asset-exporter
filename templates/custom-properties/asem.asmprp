@@ -65,8 +65,8 @@
         </Data>
       </Control>
       <Control Label="is_quick_changer_rack" PropName="is_quick_changer_rack" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0" />
-      <Control Label="connection_interface" PropName="connection_interface" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
-      <Control Label="accepts_interfaces" PropName="accepts_interfaces" ApplyTo="Global" Type="TextBox" ReadOnly="False" DefaultValue="" Mode="Text" />
+      <Control Label="connection_interface（插件维护）" PropName="connection_interface" ApplyTo="Global" Type="TextBox" ReadOnly="True" DefaultValue="" Mode="Text" />
+      <Control Label="accepts_interfaces（插件维护）" PropName="accepts_interfaces" ApplyTo="Global" Type="TextBox" ReadOnly="True" DefaultValue="" Mode="Text" />
       <Control Label="has_QRcode" PropName="has_QRcode" ApplyTo="Global" Type="CheckBox" ReadOnly="False" DefaultValue="0" PropValueChecked="1" PropValueUnchecked="0">
         <ChildControl PropName="QR_num" Visibility="IsChecked=true" />
         <ChildControl PropName="QR_size" Visibility="IsChecked=true" />

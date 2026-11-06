@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "assembly_uuid": "8a66876c-5175-5b26-a5e2-c36a26062e29",
+  "assembly_version": 1,
+  "content_fingerprint": "78c071b7428d16e03ddd5d7f717c22b10469d4b66863982804fb61f65d250d6f",
+  "reused_assets": [ ],
+  "created_assets": [
+    "95141b1f-a0e2-552b-a7db-246581c68e6b:1",
+    "b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1"
+  ],
+  "project_units": [ ],
+  "warnings": [ ],
+  "files": [
+    {
+      "path": "assembly-relations.json",
+      "sha256": "53720e45f6d316306cc53bf7797526f2ab33259aae17744c40f4e7c6482d232d",
+      "size": 1193
+    },
+    {
+      "path": "assembly_8a66876c-5175-5b26-a5e2-c36a26062e29_v1.xml",
+      "sha256": "6965afa5e0c2048c5e9fd22bce27e54fab7f0686df3b5ab9f8f84c4c97c9621e",
+      "size": 4063
+    }
+  ],
+  "relations_schema_version": "1.0"
+}

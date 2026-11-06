@@ -33,10 +33,12 @@
     <Compile Include="AssetRegistry.cs" />
     <Compile Include="AssetSources.cs" />
     <Compile Include="Domain.cs" />
+    <Compile Include="InstanceBindings.cs" />
     <Compile Include="Files.cs" />
     <Compile Include="IdentityAndProperties.cs" />
     <Compile Include="Partitioning.cs" />
     <Compile Include="Serialization.cs" />
+    <Compile Include="StlGeometryFingerprint.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

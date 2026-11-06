@@ -12,7 +12,9 @@ namespace SolidWorksAssetExporter.AddIn
     {
         private static readonly string[] ClassificationPropertyNames =
             { PropertyRules.IsAsset, PropertyRules.AssetVersion, PropertyRules.AssemblyVersion,
-                PropertyRules.AssetClass, PropertyRules.DesignPurpose };
+                PropertyRules.AssetClass, PropertyRules.DesignPurpose,
+                PropertyRules.IsWorkstation, PropertyRules.LegacyIsWorkstation,
+                PropertyRules.WorkstationName, PropertyRules.LegacyWorkstationName };
         private readonly Component2 _component;
         private readonly SldWorks _application;
         private readonly bool _isTraversalRoot;

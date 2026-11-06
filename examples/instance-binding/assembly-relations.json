@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "assembly_uuid": "8a66876c-5175-5b26-a5e2-c36a26062e29",
+  "assembly_version": 1,
+  "length_unit": "m",
+  "quaternion_order": "xyzw",
+  "relations": [
+    {
+      "parent_node_id": "0f987f2c-560e-568c-96b0-d16f3fc91d1e",
+      "child_node_id": "b6619abd-405e-5586-a6a0-3885ede1db36",
+      "pose": {
+        "tx": 0.10000000000000009,
+        "ty": 0.19999999999999996,
+        "tz": 0.3,
+        "qx": 0,
+        "qy": 0,
+        "qz": 0,
+        "qw": 1
+      }
+    },
+    {
+      "parent_node_id": "0f987f2c-560e-568c-96b0-d16f3fc91d1e",
+      "child_node_id": "d76233d1-ef7e-5656-adbb-a598b25af2f2",
+      "pose": {
+        "tx": 0.29999999999999982,
+        "ty": 0.19999999999999996,
+        "tz": 0.3,
+        "qx": 0,
+        "qy": 0,
+        "qz": 0,
+        "qw": 1
+      }
+    },
+    {
+      "parent_node_id": "0f987f2c-560e-568c-96b0-d16f3fc91d1e",
+      "child_node_id": "dc1e773e-0fe4-5e47-915e-3cf26f10be4a",
+      "pose": {
+        "tx": 0.20000000000000018,
+        "ty": 0.19999999999999996,
+        "tz": 0.3,
+        "qx": 0,
+        "qy": 0,
+        "qz": 0,
+        "qw": 1
+      }
+    }
+  ]
+}

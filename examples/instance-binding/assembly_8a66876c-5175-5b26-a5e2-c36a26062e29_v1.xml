@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly schema_version="1.0" uuid="8a66876c-5175-5b26-a5e2-c36a26062e29" version="1" mesh_format="step" length_unit="m" quaternion_order="xyzw">
+  <nodes>
+    <node id="9f744d7d-9fb2-5a53-ac8a-4f42f1735cb7" parent_id="" name="Binding-Group-1" kind="group">
+      <pose tx="0" ty="0" tz="0" qx="0" qy="0" qz="0" qw="1" />
+    </node>
+    <node id="0f987f2c-560e-568c-96b0-d16f3fc91d1e" parent_id="9f744d7d-9fb2-5a53-ac8a-4f42f1735cb7" name="Binding-Group-1/binding-test-rack-1" kind="asset">
+      <pose tx="1" ty="2" tz="0" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="95141b1f-a0e2-552b-a7db-246581c68e6b:1" />
+    </node>
+    <node id="c0fc4115-1bb5-56f0-96d9-e1cbc427d342" parent_id="9f744d7d-9fb2-5a53-ac8a-4f42f1735cb7" name="Binding-Group-1/binding-test-rack-2" kind="asset">
+      <pose tx="1.5" ty="2" tz="0" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="95141b1f-a0e2-552b-a7db-246581c68e6b:1" />
+    </node>
+    <node id="b6619abd-405e-5586-a6a0-3885ede1db36" parent_id="9f744d7d-9fb2-5a53-ac8a-4f42f1735cb7" name="Binding-Group-1/binding-test-tube-1" kind="asset">
+      <pose tx="0.8" ty="2.1" tz="0.3" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1" />
+    </node>
+    <node id="dc1e773e-0fe4-5e47-915e-3cf26f10be4a" parent_id="9f744d7d-9fb2-5a53-ac8a-4f42f1735cb7" name="Binding-Group-1/binding-test-tube-2" kind="asset">
+      <pose tx="0.8" ty="2.2" tz="0.3" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1" />
+    </node>
+    <node id="d76233d1-ef7e-5656-adbb-a598b25af2f2" parent_id="9f744d7d-9fb2-5a53-ac8a-4f42f1735cb7" name="Binding-Group-1/binding-test-tube-3" kind="asset">
+      <pose tx="0.8" ty="2.3" tz="0.3" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1" />
+    </node>
+    <node id="4a61b9e1-8f81-5ee1-967b-3e17e105f1bd" parent_id="" name="Binding-Group-2" kind="group">
+      <pose tx="3" ty="0" tz="0" qx="0" qy="0" qz="0.19866933079506124" qw="0.98006657784124163" />
+    </node>
+    <node id="08aa62c8-c84f-54cb-915a-3bbb1f5b8849" parent_id="4a61b9e1-8f81-5ee1-967b-3e17e105f1bd" name="Binding-Group-2/binding-test-rack-1" kind="asset">
+      <pose tx="1" ty="2" tz="0" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="95141b1f-a0e2-552b-a7db-246581c68e6b:1" />
+    </node>
+    <node id="93aa1293-e4c0-52d6-a508-c8218aee36c6" parent_id="4a61b9e1-8f81-5ee1-967b-3e17e105f1bd" name="Binding-Group-2/binding-test-rack-2" kind="asset">
+      <pose tx="1.5" ty="2" tz="0" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="95141b1f-a0e2-552b-a7db-246581c68e6b:1" />
+    </node>
+    <node id="9f2256e4-d5a9-5d6a-a92c-a868e46a3648" parent_id="4a61b9e1-8f81-5ee1-967b-3e17e105f1bd" name="Binding-Group-2/binding-test-tube-1" kind="asset">
+      <pose tx="0.79999999999999982" ty="2.1000000000000005" tz="0.3" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1" />
+    </node>
+    <node id="97a9f2e9-0418-5ebd-b3ac-aa65a5646719" parent_id="4a61b9e1-8f81-5ee1-967b-3e17e105f1bd" name="Binding-Group-2/binding-test-tube-2" kind="asset">
+      <pose tx="0.79999999999999982" ty="2.2" tz="0.3" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1" />
+    </node>
+    <node id="f11a8379-8450-5475-99da-c3ba18b8f503" parent_id="4a61b9e1-8f81-5ee1-967b-3e17e105f1bd" name="Binding-Group-2/binding-test-tube-3" kind="asset">
+      <pose tx="0.79999999999999982" ty="2.3" tz="0.3" qx="0" qy="0" qz="0.70710678118654746" qw="0.70710678118654757" />
+      <mesh asset_id="b13f74c3-b9a5-5c87-beeb-fdd267af6cee:1" />
+    </node>
+  </nodes>
+</assembly>

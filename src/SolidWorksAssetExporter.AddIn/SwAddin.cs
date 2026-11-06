@@ -18,6 +18,8 @@ namespace SolidWorksAssetExporter.AddIn
         private int _cookie;
         private CommandManager _commands;
         private ExportDialog _dialog;
+        private InstanceBindingDialog _bindingDialog;
+        private System.Windows.Forms.Control _uiDispatcher;
 
         public bool ConnectToSW(object thisSw, int cookie)
         {
@@ -32,6 +34,8 @@ namespace SolidWorksAssetExporter.AddIn
                     return false;
                 }
                 stage = "AddCommands";
+                _uiDispatcher = new System.Windows.Forms.Control();
+                if (_uiDispatcher.Handle == IntPtr.Zero) throw new InvalidOperationException("无法创建 SW 界面线程调度窗口。");
                 AddCommands();
                 WriteDiagnostic("ConnectToSW succeeded.");
                 return true;
@@ -58,6 +62,9 @@ namespace SolidWorksAssetExporter.AddIn
                     if (!dialog.IsDisposed) dialog.Dispose();
                 }
                 stage = "remove command group";
+                if (_bindingDialog != null) { _bindingDialog.Close(); _bindingDialog = null; }
+                SwInstanceBindings.CloseAll();
+                if (_uiDispatcher != null) { _uiDispatcher.Dispose(); _uiDispatcher = null; }
                 if (_commands != null) _commands.RemoveCommandGroup2(CommandGroupId, true);
                 // The host owns these RCWs. FinalReleaseComObject can invalidate another
                 // live reference while SOLIDWORKS is shutting down and crash the native process.
@@ -77,6 +84,7 @@ namespace SolidWorksAssetExporter.AddIn
 
         public void OnExport()
         {
+            if (_application == null || DispatchToUi(OnExport)) return;
             if (_dialog != null && !_dialog.IsDisposed) { _dialog.Activate(); return; }
             _dialog = new ExportDialog(_application); _dialog.FormClosed += delegate { _dialog = null; }; _dialog.Show();
         }
@@ -85,6 +93,39 @@ namespace SolidWorksAssetExporter.AddIn
         {
             try { return _application != null && _application.ActiveDoc != null ? 1 : 0; }
             catch { return 0; }
+        }
+
+        public void OnInstanceBindings()
+        {
+            try
+            {
+                if (_application == null || DispatchToUi(OnInstanceBindings)) return;
+                if (_bindingDialog != null && !_bindingDialog.IsDisposed) { _bindingDialog.Activate(); return; }
+                _bindingDialog = new InstanceBindingDialog(_application);
+                _bindingDialog.FormClosed += delegate { _bindingDialog = null; };
+                _bindingDialog.Show(new SwWindowOwner(new IntPtr(_application.IFrameObject().GetHWndx64())));
+            }
+            catch (Exception ex) { System.Windows.Forms.MessageBox.Show(ex.Message, "承载关系"); }
+        }
+
+        private bool DispatchToUi(Action action)
+        {
+            var dispatcher = _uiDispatcher;
+            if (dispatcher == null || dispatcher.IsDisposed || !dispatcher.InvokeRequired) return false;
+            dispatcher.BeginInvoke(action);
+            return true;
+        }
+
+        private sealed class SwWindowOwner : System.Windows.Forms.IWin32Window
+        {
+            public SwWindowOwner(IntPtr handle) { Handle = handle; }
+            public IntPtr Handle { get; private set; }
+        }
+
+        public string GetBuildInfo()
+        {
+            return "instance-bindings-v4|" + typeof(SwAddin).Assembly.Location + "|" +
+                typeof(SolidWorksAssetExporter.Core.ExportNode).Assembly.Location;
         }
 
         private void AddCommands()
@@ -97,6 +138,8 @@ namespace SolidWorksAssetExporter.AddIn
                 throw new InvalidOperationException("无法创建 SOLIDWORKS 命令组，错误码: " + errors);
             group.AddCommandItem2("Asset / assembly_package 导出", -1, "分类预览并导出", "Asset / assembly_package 导出", -1,
                 "OnExport", "CanExport", 0, (int)swCommandItemType_e.swMenuItem);
+            group.AddCommandItem2("承载关系", -1, "绑定组件实例的业务承载关系", "承载关系", -1,
+                "OnInstanceBindings", "", 1, (int)swCommandItemType_e.swMenuItem);
             group.HasMenu = true; group.HasToolbar = false; group.Activate();
         }
 

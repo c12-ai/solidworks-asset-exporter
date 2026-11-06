@@ -128,6 +128,20 @@ namespace SolidWorksAssetExporter.AddIn
             }
         }
 
+        public void ExportStl(SwCadNode node, string destinationPath)
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(destinationPath));
+            Directory.CreateDirectory(directory);
+            using (var lease = node.OpenDocument())
+            using (new SwActiveDocumentScope(_app, lease.Document, !lease.OpenedHere))
+            using (new SwReferencedConfigurationScope(lease.Document, node.ReferencedConfiguration, _mutationTracker))
+            using (new SwSelectionScope(lease.Document))
+            {
+                SelectVisibleGeometry(lease.Document);
+                Save(lease.Document, destinationPath);
+            }
+        }
+
         private static void SelectVisibleGeometry(ModelDoc2 document)
         {
             document.ClearSelection2(true);
@@ -168,7 +182,9 @@ namespace SolidWorksAssetExporter.AddIn
                 (int)swSaveAsOptions_e.swSaveAsOptions_Silent, null, null, ref errors, ref warnings);
             if (!ok || errors != 0 || !File.Exists(path))
                 throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
-                    "几何导出失败：{0}; errors={1}, warnings={2}", path, errors, warnings));
+                    "几何导出失败（{0}）：{1}; SaveAs3={2}, errors={3}, warnings={4}, fileExists={5}",
+                    Path.GetExtension(path).TrimStart('.').ToUpperInvariant(), path, ok,
+                    errors, warnings, File.Exists(path)));
         }
     }
 

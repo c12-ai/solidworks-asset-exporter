@@ -10,6 +10,10 @@ namespace SolidWorksAssetExporter.Core
     public static class PropertyRules
     {
         public const string IsAsset = "is_asset";
+        public const string IsWorkstation = "is_workstation";
+        public const string LegacyIsWorkstation = "is-workstation";
+        public const string WorkstationName = "workstation_name";
+        public const string LegacyWorkstationName = "workstationname";
         public const string AssetVersion = "asset_version";
         public const string AssemblyVersion = "assembly_version";
         public const string AssetClass = "class";
@@ -27,6 +31,18 @@ namespace SolidWorksAssetExporter.Core
 
         private static readonly string[] BooleanAssetProperties =
             { IsTool, IsFixture, IsQuickChanger, IsQuickChangerRack, IsAdjustable, HasQrCode };
+
+        public static string CanonicalPublishedValue(string key, string value)
+        {
+            var normalized = (value ?? string.Empty).Trim();
+            if (!BooleanAssetProperties.Contains(key, StringComparer.OrdinalIgnoreCase)) return normalized;
+            if (normalized.Length == 0 || normalized == "0" ||
+                normalized.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("no", StringComparison.OrdinalIgnoreCase)) return "0";
+            if (normalized == "1" || normalized.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("yes", StringComparison.OrdinalIgnoreCase)) return "1";
+            return normalized;
+        }
 
         public static IDictionary<string, string> Merge(ModelDescriptor model)
         {
@@ -211,6 +227,10 @@ namespace SolidWorksAssetExporter.Core
         private static bool IsClassificationProperty(string name)
         {
             return string.Equals(name, IsAsset, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, IsWorkstation, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, LegacyIsWorkstation, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, WorkstationName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, LegacyWorkstationName, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, AssetVersion, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, AssemblyVersion, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(name, AssetClass, StringComparison.OrdinalIgnoreCase) ||
@@ -228,6 +248,35 @@ namespace SolidWorksAssetExporter.Core
                     throw new ValidationException(scope + "自定义属性包含大小写不同的重复名称: [" + pair.Key + "]。");
                 target.Add(pair.Key, pair.Value ?? string.Empty);
             }
+        }
+
+        public static bool ReadIsWorkstation(IDictionary<string, string> properties, DocumentKind kind)
+        {
+            if (kind != DocumentKind.Assembly || properties == null) return false;
+            string value, legacy;
+            var hasValue = properties.TryGetValue(IsWorkstation, out value);
+            var hasLegacy = properties.TryGetValue(LegacyIsWorkstation, out legacy);
+            var flags = new[] { "true", "1", "yes" };
+            var currentFlag = flags.Contains((value ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase);
+            var legacyFlag = flags.Contains((legacy ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase);
+            if (hasValue && hasLegacy && currentFlag != legacyFlag)
+                throw new ValidationException("文件级属性 [is_workstation] 与 [is-workstation] 不一致，请统一工位标记。");
+            return hasValue ? currentFlag : legacyFlag;
+        }
+
+        public static string RequireWorkstationName(IDictionary<string, string> properties, string nodeName)
+        {
+            string value;
+            string legacy;
+            properties.TryGetValue(WorkstationName, out value);
+            properties.TryGetValue(LegacyWorkstationName, out legacy);
+            if (!string.IsNullOrWhiteSpace(value) && !string.IsNullOrWhiteSpace(legacy) &&
+                !string.Equals(value.Trim(), legacy.Trim(), StringComparison.Ordinal))
+                throw new ValidationException("工位 [" + nodeName + "] 的 [workstation_name] 与 [workstationname] 不一致。");
+            if (string.IsNullOrWhiteSpace(value)) value = legacy;
+            if (string.IsNullOrWhiteSpace(value))
+                throw new ValidationException("工位 [" + nodeName + "] 的文件级自定义属性 [workstation_name] 缺失或为空白。");
+            return value.Trim();
         }
 
         public static bool ReadIsAsset(IDictionary<string, string> properties)

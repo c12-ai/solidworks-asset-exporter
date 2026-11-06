@@ -9,11 +9,20 @@ namespace SolidWorks.Interop.swpublished
 
 namespace SolidWorks.Interop.sldworks
 {
+    public interface DAssemblyDocEvents_Event
+    {
+        event Func<int> NewSelectionNotify;
+        event Func<int> SaveToStorageNotify;
+        event Func<int, string, int> FileSavePostNotify;
+        event Func<int> FileSavePostCancelNotify;
+        event Func<int, int> DestroyNotify2;
+    }
     public class SldWorks
     {
         public virtual object ActiveDoc { get; set; }
         public bool SetAddinCallbackInfo2(int reserved, object addin, int cookie) { return true; }
         public CommandManager GetCommandManager(int cookie) { return null; }
+        public Frame IFrameObject() { return null; }
         public int GetUserPreferenceIntegerValue(int value) { return 0; }
         public bool SetUserPreferenceIntegerValue(int value, int setting) { return true; }
         public bool GetUserPreferenceToggle(int value) { return false; }
@@ -36,18 +45,22 @@ namespace SolidWorks.Interop.sldworks
     {
         string Name2 { get; }
         int GetID(); int Visible { get; }
+        object GetParent();
         bool IsSuppressed(); int GetSuppression2(); int SetSuppression2(int state); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
         object GetModelDoc2(); object GetChildren(); string GetPathName();
         bool IsVirtual { get; }
         MathTransform Transform2 { get; }
     }
+    public interface Frame { long GetHWndx64(); }
 
     public interface MathTransform { object ArrayData { get; } }
 
     public interface ModelDoc2
     {
         int GetType(); string GetPathName(); string GetTitle(); bool GetSaveFlag(); int GetUpdateStamp(); string get_SummaryInfo(int fieldId);
+        void SetSaveFlag(); object IGet3rdPartyStorage(string name, bool storing); void IRelease3rdPartyStorage(string name);
         bool IsOpenedReadOnly();
+        bool Save3(int options, ref int errors, ref int warnings);
         bool Visible { get; set; }
         ConfigurationManager ConfigurationManager { get; }
         ModelDocExtension Extension { get; }
@@ -73,9 +86,11 @@ namespace SolidWorks.Interop.sldworks
     public interface Configuration
     {
         string Name { get; } Component2 GetRootComponent3(bool resolve); object GetDisplayStates();
+        int GetID();
     }
     public interface ModelDocExtension
     {
+        object GetPersistReference3(object value); object GetObjectByPersistReference3(object bytes, out int error);
         PackAndGo GetPackAndGo(); object SavePackAndGo(PackAndGo value);
         bool SaveAs(string name, int version, int options, object exportData, ref int errors, ref int warnings);
         bool SaveAs3(string name, int version, int options, object exportData, object advancedSaveAsOptions,
@@ -83,11 +98,13 @@ namespace SolidWorks.Interop.sldworks
     }
     public interface CustomPropertyManager
     {
+        int Add3(string name, int type, string value, int options); int Delete2(string name); int GetType2(string name);
         object GetNames(); int Get6(string name, bool cached, out string raw, out string resolved, out bool wasResolved, out bool linked);
     }
     public interface SelectionMgr
     {
         int GetSelectedObjectCount2(int mark); object GetSelectedObject6(int index, int mark);
+        object GetSelectedObjectsComponent4(int index, int mark);
         int GetSelectedObjectMark(int index); object CreateSelectData();
     }
     public interface ExportPdfData { bool SetSheets(int mode, object sheets); bool ViewPdfAfterSaving { get; set; } }

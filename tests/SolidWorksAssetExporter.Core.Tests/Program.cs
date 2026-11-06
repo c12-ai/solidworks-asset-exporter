@@ -18,12 +18,13 @@ using SolidWorksAssetExporter.Core;
 
 namespace SolidWorksAssetExporter.Core.Tests
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static int _failures;
 
         private static int Main()
         {
+            RunInstanceBindingTests();
             Run("Asset boundary never reads children", AssetBoundaryNeverReadsChildren);
             Run("Asset subassembly stays opaque", AssetSubassemblyStaysOpaque);
             Run("Asset parent skips child property validation", AssetParentSkipsChildPropertyValidation);
@@ -46,14 +47,18 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Asset identity uses creation time and file name only", AssetIdentityUsesCreationTimeAndFileName);
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
             Run("XML has leaf mesh references", XmlLeafReferences);
+            Run("Workstation XML preserves hierarchy and references", WorkstationXml);
+            Run("Workstation names are required and kinds stay distinct", WorkstationValidation);
             Run("Robot is an assembly_package XML reference and never an Asset", RobotIsProjectReference);
             Run("Robot UUID matches the published name protocol", RobotUuidMatchesPublishedProtocol);
             Run("Robot identity is stable across versions and repeated instances", RobotIdentityIsStableAcrossVersionsAndInstances);
             Run("Robot references reject invalid names, versions and legacy IDs", RobotReferencesRejectInvalidInputs);
-            Run("Non-Robot package fingerprint retains its existing layout", NonRobotPackageFingerprintIsUnchanged);
+            Run("Relations format migration changes the package fingerprint", NonRobotPackageFingerprintIsUnchanged);
             Run("Robot reference migration requires a new package version", RobotReferenceMigrationRequiresNewPackageVersion);
             Run("assembly_package export can be disabled", ProjectExportCanBeDisabled);
             Run("Manifest validates hashes and conflicts", ManifestValidation);
+            Run("STL geometry fingerprint ignores export metadata and facet order", StlFingerprintIgnoresMetadata);
+            Run("Missing and false-valued optional properties are equivalent", OptionalPropertyDefaultsAreEquivalent);
             Run("Robot Asset is metadata only", RobotAssetIsMetadataOnly);
             Run("assembly_package report validates immutable package", ProjectReportValidation);
             Run("Directory transaction is immutable", DirectoryTransactionIsImmutable);
@@ -125,6 +130,68 @@ namespace SolidWorksAssetExporter.Core.Tests
             var scan = new AssemblyScanner().Scan(asset);
             Equal(ScanClassification.AssetBoundary, scan.Classification);
             Equal(0, asset.GetChildrenCalls);
+        }
+
+        private static void StlFingerprintIgnoresMetadata()
+        {
+            var temporary = TempDirectory();
+            try
+            {
+                var first = Path.Combine(temporary, "first.stl");
+                var second = Path.Combine(temporary, "second.stl");
+                var changed = Path.Combine(temporary, "changed.stl");
+                WriteStl(first, "first export", false, false);
+                WriteStl(second, "second export", true, false);
+                WriteStl(changed, "third export", true, true);
+                Equal(StlGeometryFingerprint.Compute(first), StlGeometryFingerprint.Compute(second));
+                True(!string.Equals(StlGeometryFingerprint.Compute(first),
+                    StlGeometryFingerprint.Compute(changed), StringComparison.Ordinal));
+            }
+            finally { Directory.Delete(temporary, true); }
+        }
+
+        private static void OptionalPropertyDefaultsAreEquivalent()
+        {
+            Equal(PropertyRules.CanonicalPublishedValue(PropertyRules.ConnectionInterface, null),
+                PropertyRules.CanonicalPublishedValue(PropertyRules.ConnectionInterface, "  "));
+            foreach (var key in new[] { PropertyRules.IsTool, PropertyRules.IsFixture,
+                PropertyRules.IsQuickChanger, PropertyRules.IsQuickChangerRack,
+                PropertyRules.IsAdjustable, PropertyRules.HasQrCode })
+            {
+                Equal("0", PropertyRules.CanonicalPublishedValue(key, null));
+                Equal("0", PropertyRules.CanonicalPublishedValue(key, "false"));
+                Equal("0", PropertyRules.CanonicalPublishedValue(key, "no"));
+                Equal("1", PropertyRules.CanonicalPublishedValue(key, "yes"));
+            }
+            True(PropertyRules.CanonicalPublishedValue(PropertyRules.IsQuickChanger, "1") !=
+                PropertyRules.CanonicalPublishedValue(PropertyRules.IsQuickChanger, null));
+            True(PropertyRules.CanonicalPublishedValue(PropertyRules.ConnectionInterface, "4-M6-A") !=
+                PropertyRules.CanonicalPublishedValue(PropertyRules.ConnectionInterface, null));
+        }
+
+        private static void WriteStl(string path, string header, bool reverse, bool change)
+        {
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+            using (var writer = new BinaryWriter(stream))
+            {
+                var bytes = new byte[80];
+                Encoding.ASCII.GetBytes(header).CopyTo(bytes, 0);
+                writer.Write(bytes);
+                writer.Write((uint)2);
+                for (var face = 0; face < 2; face++)
+                {
+                    var value = reverse ? 1 - face : face;
+                    writer.Write(reverse ? 1f : 0f);
+                    writer.Write(0f); writer.Write(0f);
+                    for (var vertex = 0; vertex < 3; vertex++)
+                    {
+                        writer.Write((float)(value + (reverse ? 2 - vertex : vertex)));
+                        writer.Write(change && value == 1 && vertex == 1 ? 2f : 0f);
+                        writer.Write(0f);
+                    }
+                    writer.Write((ushort)(reverse ? 9 : 0));
+                }
+            }
         }
 
         private static void SolidWorksComponentStateKeepsLightweightNodes()
@@ -765,6 +832,80 @@ namespace SolidWorksAssetExporter.Core.Tests
             Near(0, q.X); Near(0, q.Y); Near(Math.Sqrt(0.5), Math.Abs(q.Z)); Near(Math.Sqrt(0.5), Math.Abs(q.W));
         }
 
+        private static void WorkstationXml()
+        {
+            foreach (var key in new[] { PropertyRules.IsWorkstation, PropertyRules.LegacyIsWorkstation })
+            foreach (var flag in new[] { "true", "1", " YES " })
+            {
+                var root = Root();
+                root.Model.FileProperties[key] = flag;
+                root.Model.FileProperties[PropertyRules.WorkstationName] = "工位 & A";
+                var group = Node("station", true, true);
+                group.Model.FileProperties[key] = flag;
+                group.Model.FileProperties[PropertyRules.WorkstationName] = "子工位";
+                group.Add(Node("part", false, false));
+                root.Add(group);
+                var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+                Equal(ExportNodeKind.Workstation, plan.Roots[0].Kind);
+                Equal(ExportNodeKind.Workstation, plan.Roots[0].Children[0].Kind);
+                var temp = TempDirectory();
+                try
+                {
+                    var path = Path.Combine(temp, "assembly.xml");
+                    AssemblyXmlWriter.Write(path, plan);
+                    var nodes = XDocument.Load(path).Descendants("node").ToList();
+                    Equal(3, nodes.Count);
+                    Equal("workstation", (string)nodes[0].Attribute("kind"));
+                    Equal("工位 & A", (string)nodes[0].Attribute("workstation_name"));
+                    Equal("workstation", (string)nodes[1].Attribute("kind"));
+                    Equal((string)nodes[0].Attribute("id"), (string)nodes[1].Attribute("parent_id"));
+                    Equal("meshes", (string)nodes[2].Attribute("kind"));
+                    True(nodes[2].Element("mesh") != null);
+                }
+                finally { Directory.Delete(temp, true); }
+            }
+        }
+
+        private static void WorkstationValidation()
+        {
+            var legacy = Root();
+            legacy.Model.FileProperties[PropertyRules.LegacyIsWorkstation] = "1";
+            legacy.Model.FileProperties[PropertyRules.LegacyWorkstationName] = "兼容工位";
+            var legacyPlan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(legacy), ProjectMeshFormat.Step);
+            Equal(ExportNodeKind.Workstation, legacyPlan.Roots[0].Kind);
+            Equal("兼容工位", AssemblyXmlWriter.WorkstationName(legacyPlan.Roots[0]));
+            legacy.Model.FileProperties[PropertyRules.IsWorkstation] = "0";
+            Throws<ValidationException>(() => new AssemblyScanner().Scan(legacy));
+            legacy.Model.FileProperties[PropertyRules.IsWorkstation] = "yes";
+            legacy.Model.FileProperties[PropertyRules.WorkstationName] = "冲突名称";
+            Throws<ValidationException>(() => new AssemblyScanner().Scan(legacy));
+            foreach (var name in new[] { null, "", "   " })
+            {
+                var root = Root();
+                root.Model.FileProperties[PropertyRules.IsWorkstation] = "1";
+                if (name != null) root.Model.FileProperties[PropertyRules.WorkstationName] = name;
+                // Configuration-specific names cannot satisfy the file-level requirement.
+                root.Model.ConfigurationProperties[PropertyRules.WorkstationName] = "配置工位";
+                Throws<ValidationException>(() => new AssemblyScanner().Scan(root));
+            }
+            var normal = Root();
+            var group = Node("group", true, true);
+            group.Model.FileProperties[PropertyRules.WorkstationName] = "普通装配体名称";
+            group.Add(Node("part", false, false));
+            normal.Add(group);
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(normal), ProjectMeshFormat.Step);
+            Equal(ExportNodeKind.Group, plan.Roots[0].Kind);
+
+            var empty = Root();
+            empty.Model.FileProperties[PropertyRules.IsWorkstation] = "yes";
+            empty.Model.FileProperties[PropertyRules.WorkstationName] = " 空工位 ";
+            var emptyPlan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(empty), ProjectMeshFormat.Step);
+            Equal(ExportNodeKind.Workstation, emptyPlan.Roots[0].Kind);
+            Equal("空工位", AssemblyXmlWriter.WorkstationName(emptyPlan.Roots[0]));
+            emptyPlan.Roots[0].Properties[PropertyRules.WorkstationName] = " ";
+            Throws<ValidationException>(() => ExportPlanValidator.Validate(emptyPlan));
+        }
+
         private static void XmlLeafReferences()
         {
             var root = Root();
@@ -1206,8 +1347,13 @@ namespace SolidWorksAssetExporter.Core.Tests
                 "33333333-3333-5333-8333-333333333333:1", "33333333-3333-5333-8333-333333333333");
             // Baseline includes the original empty RobotId position in the serialized material.
             const string baseline = "edb1d7d5a7046dadb6906e7a2b60ca0ae3c0ee137be96a0e3956d7aa1c73dc09";
-            Equal(baseline, PlanFingerprint(plan));
-            Equal(baseline, ProjectFingerprint(plan));
+            True(baseline != PlanFingerprint(plan));
+            Equal(PlanFingerprint(plan), ProjectFingerprint(plan));
+            // The migration is required even when there are no explicit bindings.
+            plan.ExportProject = false;
+            var withoutProject = PlanFingerprint(plan);
+            plan.Relations.Relations.Add(new AssemblyRelation { ParentNodeId = "p", ChildNodeId = "c", Pose = RelationPose.From(Pose.FromTransform(Matrix4.Identity)) });
+            Equal(withoutProject, PlanFingerprint(plan));
         }
 
         private static void RobotReferenceMigrationRequiresNewPackageVersion()
@@ -1840,7 +1986,7 @@ namespace SolidWorksAssetExporter.Core.Tests
                 Directory.CreateDirectory(assetDirectory);
                 Directory.CreateDirectory(projectDirectory);
                 File.WriteAllText(Path.Combine(assetDirectory, "asset.txt"), "asset");
-                File.WriteAllText(Path.Combine(projectDirectory, "project.txt"), "project");
+                BindingWritePackage(projectDirectory, new BindingFixture());
                 var export = new ExportCompletion { ProjectDirectory = projectDirectory };
                 export.AssetDirectories.Add(assetDirectory);
                 export.AssetRegistrations.Add(Registration(uuid, 1, fingerprint));
@@ -2386,6 +2532,7 @@ namespace SolidWorksAssetExporter.Core.Tests
         public FakePropertyManagerCollection CustomPropertyManager { get; private set; }
         public MathTransform Transform2 { get { return null; } }
         public int GetID() { return 1; }
+        public object GetParent() { return null; }
         public bool IsSuppressed() { return SuppressionState != (int)swComponentSuppressionState_e.swComponentResolved; }
         public int GetSuppression2() { return SuppressionState; }
         public int SetSuppression2(int state) { SuppressionChanges.Add(state); SuppressionState = state; return 2; }
@@ -2425,6 +2572,9 @@ namespace SolidWorksAssetExporter.Core.Tests
 
     internal sealed class FakeCustomPropertyManager : CustomPropertyManager
     {
+        public int Add3(string name, int type, string value, int options) { Values[name] = value; return 0; }
+        public int Delete2(string name) { Values.Remove(name); return 0; }
+        public int GetType2(string name) { return 30; }
         public FakeCustomPropertyManager()
         {
             Values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -2586,6 +2736,10 @@ namespace SolidWorksAssetExporter.Core.Tests
         public string GetPathName() { return _path; }
         public string GetTitle() { return _title; }
         public bool GetSaveFlag() { return SaveFlag; }
+        public void SetSaveFlag() { SaveFlag = true; }
+        public bool Save3(int options, ref int errors, ref int warnings) { throw new NotSupportedException(); }
+        public object IGet3rdPartyStorage(string name, bool storing) { return null; }
+        public void IRelease3rdPartyStorage(string name) { }
         public int GetUpdateStamp() { return UpdateStamp; }
         public bool IsOpenedReadOnly() { return OpenedReadOnly; }
         public string get_SummaryInfo(int fieldId) { return string.Empty; }
@@ -2595,6 +2749,8 @@ namespace SolidWorksAssetExporter.Core.Tests
 
     internal sealed class FakeModelDocExtension : ModelDocExtension
     {
+        public object GetPersistReference3(object value) { return null; }
+        public object GetObjectByPersistReference3(object bytes, out int error) { error = 1; return null; }
         public FakeModelDocExtension()
         {
             CustomPropertyManager = new FakePropertyManagerCollection();

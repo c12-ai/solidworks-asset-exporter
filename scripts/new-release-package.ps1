@@ -88,12 +88,42 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-custom-property-templat
     -Destination (Join-Path $packageRoot 'Install-CustomPropertyTemplates.ps1')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\custom-properties') `
     -Destination (Join-Path $packageRoot 'custom-properties') -Recurse
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-interface-options.ps1') -Destination (Join-Path $packageRoot 'Install-InterfaceOptions.ps1')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\interfaces') -Destination (Join-Path $packageRoot 'interfaces') -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot 'macros') `
     -Destination (Join-Path $packageRoot 'macros') -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination (Join-Path $packageRoot 'README.md')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\RELEASING.md') -Destination (Join-Path $packageRoot 'RELEASING.md')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-user-update.ps1') -Destination (Join-Path $packageRoot 'Install-UserUpdate.ps1')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'restore-user-update.ps1') -Destination (Join-Path $packageRoot 'Restore-UserUpdate.ps1')
+New-Item -ItemType Directory -Path (Join-Path $packageRoot 'docs'),(Join-Path $packageRoot 'examples') -Force | Out-Null
+foreach ($document in Get-ChildItem -LiteralPath (Join-Path $repoRoot 'docs') -File) {
+    Copy-Item -LiteralPath $document.FullName -Destination (Join-Path $packageRoot 'docs')
+}
+Copy-Item -LiteralPath (Join-Path $repoRoot 'examples\instance-binding') -Destination (Join-Path $packageRoot 'examples\instance-binding') -Recurse
+$evidence = Join-Path $repoRoot 'artifacts\instance-binding-evidence'
+if (Test-Path -LiteralPath $evidence -PathType Container) {
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
+    Copy-Item -LiteralPath $evidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-evidence') -Recurse
+}
+$interactionEvidence = Join-Path $repoRoot 'artifacts\instance-binding-ui2-evidence'
+if (Test-Path -LiteralPath $interactionEvidence -PathType Container) {
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
+    Copy-Item -LiteralPath $interactionEvidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-ui2-evidence') -Recurse
+}
+
+$interfaceEvidence = Join-Path $repoRoot 'artifacts\instance-binding-ui3-evidence'
+if (Test-Path -LiteralPath $interfaceEvidence -PathType Container) {
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
+    Copy-Item -LiteralPath $interfaceEvidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-ui3-evidence') -Recurse
+}
 
 $archive = Join-Path $output "$packageName.zip"
+$multiParentEvidence = Join-Path $repoRoot 'artifacts\instance-binding-rc4-evidence'
+if (Test-Path -LiteralPath $multiParentEvidence -PathType Container) {
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
+    Copy-Item -LiteralPath $multiParentEvidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-rc4-evidence') -Recurse
+}
 if (Test-Path -LiteralPath $archive) { throw "Release archive already exists: $archive" }
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $archive -CompressionLevel Optimal
 Get-FileHash -LiteralPath $archive -Algorithm SHA256 | Format-List
