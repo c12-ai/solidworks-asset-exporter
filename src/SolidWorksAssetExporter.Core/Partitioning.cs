@@ -19,6 +19,8 @@ namespace SolidWorksAssetExporter.Core
             var classificationModel = classificationSource == null ? node.Model : classificationSource.ClassificationModel;
             ModelRules.ValidateClassifiable(classificationModel);
             var properties = PropertyRules.MergeForClassification(classificationModel);
+            if (PropertyRules.ReadIsWorkstation(properties, classificationModel.DocumentKind))
+                PropertyRules.RequireWorkstationName(properties, node.Name);
             var result = new ScanNode { Source = node, Properties = properties };
 
             // This return is deliberately before GetChildren. An Asset is an opaque semantic boundary.
@@ -77,7 +79,8 @@ namespace SolidWorksAssetExporter.Core
                 ExportProject = exportProject
             };
 
-            if (root.Classification == ScanClassification.AssetBoundary || root.Children.Count == 0)
+            var rootIsWorkstation = PropertyRules.ReadIsWorkstation(root.Properties, assemblyModel.DocumentKind);
+            if (root.Classification == ScanClassification.AssetBoundary || root.Children.Count == 0 || rootIsWorkstation)
             {
                 plan.Roots.Add(BuildNode(root, null, root.Source.WorldTransform, assemblyUuid, meshFormat, exportProject));
             }
@@ -126,7 +129,8 @@ namespace SolidWorksAssetExporter.Core
                 node.AssetId = IdentityService.AssetId(assetUuid, scan.AssetVersion.Value);
                 return node;
             }
-            if (scan.Children.Count == 0)
+            var workstation = PropertyRules.ReadIsWorkstation(scan.Properties, PlanningModel(scan.Source).DocumentKind);
+            if (scan.Children.Count == 0 && !workstation)
             {
                 node.Kind = ExportNodeKind.Meshes;
                 if (exportProject)
@@ -141,10 +145,8 @@ namespace SolidWorksAssetExporter.Core
                 return node;
             }
 
-            // Every non-Asset assembly with included children remains a Group and keeps descending.
-            // Only an Asset is an opaque boundary. Meshes is the XML/wire kind for
-            // assembly_package geometry leaves.
-            node.Kind = ExportNodeKind.Group;
+            // Workstations retain their named hierarchy; other assemblies are groups.
+            node.Kind = workstation ? ExportNodeKind.Workstation : ExportNodeKind.Group;
             foreach (var child in scan.Children.OrderBy(child => child.Source.InstancePath ?? string.Empty, StringComparer.OrdinalIgnoreCase))
                 node.Children.Add(BuildNode(child, node.Id, world, assemblyUuid, meshFormat, exportProject));
             return node;
@@ -170,12 +172,19 @@ namespace SolidWorksAssetExporter.Core
         {
             if (node == null) throw new ValidationException("导出树包含空节点。");
             if (!ids.Add(node.Id)) throw new ValidationException("导出树包含重复节点 ID: [" + node.Id + "]。");
-            if (node.Kind == ExportNodeKind.Group)
+            var workstation = AssemblyXmlWriter.IsWorkstation(node);
+            if (workstation) PropertyRules.RequireWorkstationName(node.Properties, node.Name);
+            if (workstation && node.Kind == ExportNodeKind.Group)
+                throw new ValidationException("Workstation 节点不能使用 Group 分类。");
+            if (node.Kind == ExportNodeKind.Workstation && !workstation)
+                throw new ValidationException("Workstation 节点必须声明 is_workstation。");
+            if (node.Kind == ExportNodeKind.Group || node.Kind == ExportNodeKind.Workstation)
             {
                 if (!string.IsNullOrEmpty(node.AssetId) ||
                     !string.IsNullOrEmpty(node.MeshFile) || !string.IsNullOrEmpty(node.GeometryUuid))
                     throw new ValidationException("Group 节点不能包含 mesh 或几何标识。");
-                if (node.Children.Count == 0) throw new ValidationException("Group 节点必须包含子节点。");
+                if (node.Kind == ExportNodeKind.Group && node.Children.Count == 0)
+                    throw new ValidationException("Group 节点必须包含子节点。");
             }
             else
             {

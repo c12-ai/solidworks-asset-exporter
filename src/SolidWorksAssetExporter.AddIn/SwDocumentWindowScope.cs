@@ -11,6 +11,7 @@ namespace SolidWorksAssetExporter.AddIn
     public sealed class SwPluginMutationTracker
     {
         private readonly SldWorks _app;
+        private readonly bool _bindingEditor;
         private readonly IDictionary<string, int> _pluginDirtyStamps =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
@@ -18,6 +19,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
             _app = app;
         }
+        internal SwPluginMutationTracker(SldWorks app, bool bindingEditor) : this(app) { _bindingEditor = bindingEditor; }
 
         public IDisposable BeginMutation(params ModelDoc2[] affectedDocuments)
         {
@@ -27,6 +29,8 @@ namespace SolidWorksAssetExporter.AddIn
         public bool IsDirty(ModelDoc2 document, bool openedHere, string sourcePath)
         {
             if (document == null) return false;
+            if (_bindingEditor) return false;
+            if (SwInstanceBindings.HasPending(document)) return true;
             bool dirty;
             try { dirty = document.GetSaveFlag(); }
             catch { return true; }
@@ -151,6 +155,7 @@ namespace SolidWorksAssetExporter.AddIn
     {
         private readonly SldWorks _app;
         private readonly bool _openedHere;
+        private bool _retainedForEditing;
         private readonly Component2 _resolvedComponent;
         private readonly int _originalSuppressionState;
         private readonly bool _restoreSuppressionState;
@@ -176,6 +181,7 @@ namespace SolidWorksAssetExporter.AddIn
 
         public ModelDoc2 Document { get; private set; }
         public bool OpenedHere { get { return _openedHere; } }
+        public void RetainForEditing() { _retainedForEditing = true; }
 
         public static SwModelDocumentLease Borrow(SldWorks app, ModelDoc2 document)
         {
@@ -278,7 +284,7 @@ namespace SolidWorksAssetExporter.AddIn
                 }
                 return;
             }
-            if (!_openedHere || Document == null) return;
+            if (!_openedHere || _retainedForEditing || Document == null) return;
             var document = Document;
             var path = document.GetPathName();
             Document = null;

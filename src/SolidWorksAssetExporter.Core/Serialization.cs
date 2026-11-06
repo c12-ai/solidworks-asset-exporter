@@ -55,6 +55,7 @@ namespace SolidWorksAssetExporter.Core
         [DataMember(Name = "project_units", Order = 7)] public IList<string> ProjectUnits { get; set; }
         [DataMember(Name = "warnings", Order = 8)] public IList<string> Warnings { get; set; }
         [DataMember(Name = "files", Order = 9)] public IList<ManifestFile> Files { get; set; }
+        [DataMember(Name = "relations_schema_version", Order = 10, EmitDefaultValue = false)] public string RelationsSchemaVersion { get; set; }
     }
 
     public static class JsonFile
@@ -108,11 +109,13 @@ namespace SolidWorksAssetExporter.Core
 
         private static void Append(XElement nodes, ExportNode node)
         {
+            var workstation = IsWorkstation(node);
             var element = new XElement("node",
                 new XAttribute("id", node.Id),
                 new XAttribute("parent_id", node.ParentId ?? string.Empty),
                 new XAttribute("name", node.Name ?? string.Empty),
-                new XAttribute("kind", node.Kind.ToString().ToLowerInvariant()));
+                new XAttribute("kind", workstation ? "workstation" : node.Kind.ToString().ToLowerInvariant()));
+            if (workstation) element.Add(new XAttribute("workstation_name", WorkstationName(node)));
             element.Add(new XElement("pose",
                 Number("tx", node.Pose.Tx), Number("ty", node.Pose.Ty), Number("tz", node.Pose.Tz),
                 Number("qx", node.Pose.Rotation.X), Number("qy", node.Pose.Rotation.Y),
@@ -123,6 +126,19 @@ namespace SolidWorksAssetExporter.Core
                 element.Add(new XElement("mesh", new XAttribute("file", node.MeshFile)));
             nodes.Add(element);
             foreach (var child in node.Children) Append(nodes, child);
+        }
+
+        public static bool IsWorkstation(ExportNode node)
+        {
+            if (node.Source == null) return false;
+            var source = node.Source as ICadClassificationSource;
+            var model = source == null ? node.Source.Model : source.ClassificationModel;
+            return PropertyRules.ReadIsWorkstation(node.Properties, model.DocumentKind);
+        }
+
+        public static string WorkstationName(ExportNode node)
+        {
+            return PropertyRules.RequireWorkstationName(node.Properties, node.Name);
         }
 
         private static XAttribute Number(string name, double value)
@@ -232,6 +248,21 @@ namespace SolidWorksAssetExporter.Core
                 var info = new FileInfo(fullPath);
                 if (info.Length != file.Size || !string.Equals(FileHash.Sha256(fullPath), file.Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new ValidationException("assembly_package 文件哈希或大小校验失败: [" + file.Path + "]。");
+            }
+            if (report.RelationsSchemaVersion != null || projectPaths.Contains(AssemblyRelations.FileName))
+            {
+                if (report.RelationsSchemaVersion != null && report.RelationsSchemaVersion != "1.0" && report.RelationsSchemaVersion != AssemblyRelations.CurrentSchemaVersion || !projectPaths.Contains(AssemblyRelations.FileName))
+                    throw new ValidationException("assembly_package report 缺少承载关系文件声明或格式版本不受支持。");
+                try
+                {
+                    var relations = JsonFile.Read<AssemblyRelations>(Path.Combine(projectVersionDirectory, AssemblyRelations.FileName));
+                    if (report.RelationsSchemaVersion != null && report.RelationsSchemaVersion != relations.SchemaVersion)
+                        throw new ValidationException("assembly_package report 与承载关系文件的格式版本不一致。");
+                    var xmlPath = projectPaths.Single(p => p.StartsWith("assembly_", StringComparison.OrdinalIgnoreCase) && p.EndsWith(".xml", StringComparison.OrdinalIgnoreCase));
+                    relations.Validate(XDocument.Load(PathPolicy.CombineUnderRoot(projectVersionDirectory, xmlPath)), expectedAssemblyUuid, expectedVersion);
+                }
+                catch (ValidationException) { throw; }
+                catch (Exception ex) { throw new ValidationException("assembly_package 承载关系文件无法验证：" + ex.Message); }
             }
             return ExistingProjectState.Reusable;
         }

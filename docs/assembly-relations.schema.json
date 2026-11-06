@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SOLIDWORKS assembly relations 1.1 (multiple parents)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "assembly_uuid", "assembly_version", "length_unit", "quaternion_order", "relations"],
+  "properties": {
+    "schema_version": {"const": "1.1"},
+    "assembly_uuid": {"type": "string", "format": "uuid"},
+    "assembly_version": {"type": "integer", "minimum": 1},
+    "length_unit": {"const": "m"},
+    "quaternion_order": {"const": "xyzw"},
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["parent_node_id", "child_node_id", "pose"],
+        "properties": {
+          "parent_node_id": {"type": "string", "format": "uuid"},
+          "child_node_id": {"type": "string", "format": "uuid"},
+          "pose": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tx", "ty", "tz", "qx", "qy", "qz", "qw"],
+            "properties": {
+              "tx": {"type": "number"}, "ty": {"type": "number"}, "tz": {"type": "number"},
+              "qx": {"type": "number"}, "qy": {"type": "number"}, "qz": {"type": "number"}, "qw": {"type": "number"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Additionally require unique XML Asset node IDs, unique (parent_node_id, child_node_id) pairs, no self edge/cycle, same-package identity, finite values and unit quaternions. A child may have multiple parents; each edge stores its own parent-relative pose."
+}

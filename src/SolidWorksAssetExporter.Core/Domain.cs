@@ -5,7 +5,7 @@ namespace SolidWorksAssetExporter.Core
 {
     public enum DocumentKind { Part, Assembly, Drawing, Unknown }
     public enum ScanClassification { AssetBoundary, ContainsAsset, NoAsset }
-    public enum ExportNodeKind { Group, Asset, Meshes, Robot }
+    public enum ExportNodeKind { Group, Asset, Meshes, Robot, Workstation }
     public enum ProjectMeshFormat { Step, Stl }
 
     public sealed class ValidationException : Exception
@@ -98,11 +98,12 @@ namespace SolidWorksAssetExporter.Core
 
     public sealed class AssemblyExportPlan
     {
-        public AssemblyExportPlan() { Roots = new List<ExportNode>(); }
+        public AssemblyExportPlan() { Roots = new List<ExportNode>(); Relations = new AssemblyRelations(); }
         public string AssemblyUuid { get; set; }
         public int AssemblyVersion { get; set; }
         public ProjectMeshFormat MeshFormat { get; set; }
         public bool ExportProject { get; set; }
+        public AssemblyRelations Relations { get; set; }
         public IList<ExportNode> Roots { get; private set; }
     }
 
