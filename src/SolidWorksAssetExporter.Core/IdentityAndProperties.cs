@@ -128,17 +128,9 @@ namespace SolidWorksAssetExporter.Core
             if (isTool)
                 RequireValue(issues, connection, ConnectionInterface,
                     "Tool 必须声明自身安装接口");
-            if (isFixture)
-                RequireValue(issues, accepts, AcceptsInterfaces,
-                    "Fixture 必须声明其可接受的接口");
 
-            if (isRobot)
-            {
-                RequireValue(issues, accepts, AcceptsInterfaces,
-                    "Robot 必须声明末端可接受的国标安装接口");
-                if (isTool || isFixture || isQuickChanger || isQuickChangerRack)
-                    issues.Add("[class]=robot 不能同时标记为 Tool、Fixture、快换盘或快换架。");
-            }
+            if (isRobot && (isTool || isFixture || isQuickChanger || isQuickChangerRack))
+                issues.Add("[class]=robot 不能同时标记为 Tool、Fixture、快换盘或快换架。");
 
             ValidateInterfaceList(issues, AcceptsInterfaces, accepts);
             if (connection.IndexOf(';') >= 0 || connection.IndexOf('；') >= 0)

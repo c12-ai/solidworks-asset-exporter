@@ -5,6 +5,7 @@
 装配说明
 文件名
 Author
+绘图
 绘图时间
 审核
 审核时间
@@ -20,6 +21,7 @@ Author
 供应商
 设计日期
 数量
+备注
 is_asset
 class
 is_tool
@@ -33,6 +35,8 @@ accepts_interfaces
 is_adjustable
 asset_version
 assembly_version
+is_workstation
+workstation_name
 has_QRcode
 QR_num
 QR_size

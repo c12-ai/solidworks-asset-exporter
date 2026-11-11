@@ -40,11 +40,13 @@
 - 上传顺序固定为 Asset 原子发布、Wanxiang assembly_package 上传。Asset 发布接口的 201 新注册和 200 幂等复用都视为成功；409 冲突不会留下半发布目录或改动注册表。只有启用“保存本地副本”时，发布完成后才通过 `GET /asset/registry` 下载服务端最终注册表并同步到本地。
 - 上传状态逐项显示 `Asset N/M`，Wanxiang assembly_package 分别显示打包、发送、收到 HTTP 响应和校验完成。每次上传都会在 `%LOCALAPPDATA%\SolidWorksAssetExporter\uploads` 创建独立日志，记录请求 URL、HTTP 状态码、耗时和截断后的响应摘要（不记录 API key）；插件界面可通过“查看上传日志”直接打开。上传请求使用完整响应读取，使 30 分钟 HTTP 超时同时覆盖请求体和响应体，避免服务端已处理但客户端无限等待响应结束。
 
-现有 127 项自动测试，新增实例承载关系、批量/链式交互和接口编辑回归，并包括 Asset 硬边界短路、父 Asset 跳过子属性、Asset UUID 仅由内部创建时间和文件名生成、配置特定属性完全忽略、必填 Asset 属性完整汇总、快换接口属性汇总校验与角色推导、Wanxiang 0.4.0 `class` 拼写校验、Asset 指纹版本复用/升级/重复内容判断、STL 几何比对忽略导出头/法线/面顺序、Robot 仅生成 assembly_package XML 地址引用、关闭 assembly_package 后跳过其本地/远端输出、需升版外部 Asset 自动打开且非只读、虚拟 Asset 根不作为升版文档打开、远端未注册的本地冲突包备份重建且不误报升版、预览纯文件系统图纸查找、原始 SLDDRW 与源模型同目录且不生成 PDF、未变化文件哈希缓存复用、零件 Asset 及装配包几何单元均不调用 Pack and Go、预览后源文件变化拒绝导出、Wanxiang `GET /asset/registry` 预览、默认不保存本地副本和逻辑空注册表、`PUT /asset/{uuid}/v{version}` 原子发布及 Asset→assembly_package 顺序、本地与远端 assembly_package 路径一致性、上传逐项进度、可读日志和不泄漏 API key 的 HTTP 响应诊断、轻化组件读取文件级 `is_asset=1`、同一源文件的重复实例只读取一次、已加载组件返回父装配文档时按源路径回退、虚拟/内嵌组件只在父装配中解析并恢复原轻化状态、Pack and Go 允许虚拟子组件不作为独立文件出现、Pack and Go 只在临时激活目标 Asset 子装配体后运行并恢复原窗口、Pack and Go 隔离 Asset 边界外上下文引用、Pack and Go 状态数组长度变化但 Asset 输出完整时继续提交、插件解析或配置恢复产生的 dirty 标志与后续用户模型修改相区分、完整元数据只读取文件级自定义属性、Wanxiang Bearer/URL/ZIP 契约、模型窗口所有权、避免强制只读、`QuitDoc` 关闭回退、父装配内存引用和激活警告；Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建，生产构建不会包含该 stub。
+现有 128 项自动测试，新增实例承载关系、批量/链式交互和接口编辑回归，并包括 Asset 硬边界短路、父 Asset 跳过子属性、Asset UUID 仅由内部创建时间和文件名生成、配置特定属性完全忽略、必填 Asset 属性完整汇总、快换接口属性汇总校验与角色推导、Wanxiang 0.4.0 `class` 拼写校验、Asset 指纹版本复用/升级/重复内容判断、STL 几何比对忽略导出头/法线/面顺序、Robot 仅生成 assembly_package XML 地址引用、关闭 assembly_package 后跳过其本地/远端输出、需升版外部 Asset 自动打开且非只读、虚拟 Asset 根不作为升版文档打开、远端未注册的本地冲突包备份重建且不误报升版、预览纯文件系统图纸查找、原始 SLDDRW 与源模型同目录且不生成 PDF、未变化文件哈希缓存复用、零件 Asset 及装配包几何单元均不调用 Pack and Go、预览后源文件变化拒绝导出、Wanxiang `GET /asset/registry` 预览、默认不保存本地副本和逻辑空注册表、`PUT /asset/{uuid}/v{version}` 原子发布及 Asset→assembly_package 顺序、本地与远端 assembly_package 路径一致性、上传逐项进度、可读日志和不泄漏 API key 的 HTTP 响应诊断、轻化组件读取文件级 `is_asset=1`、同一源文件的重复实例只读取一次、已加载组件返回父装配文档时按源路径回退、虚拟/内嵌组件只在父装配中解析并恢复原轻化状态、Pack and Go 允许虚拟子组件不作为独立文件出现、Pack and Go 只在临时激活目标 Asset 子装配体后运行并恢复原窗口、Pack and Go 隔离 Asset 边界外上下文引用、Pack and Go 状态数组长度变化但 Asset 输出完整时继续提交、插件解析或配置恢复产生的 dirty 标志与后续用户模型修改相区分、完整元数据只读取文件级自定义属性、Wanxiang Bearer/URL/ZIP 契约、模型窗口所有权、避免强制只读、`QuitDoc` 关闭回退、父装配内存引用和激活警告；Add-in 代码路径也可使用 `InteropStubs.cs` 做隔离契约构建，生产构建不会包含该 stub。
 
 本项目已在 SOLIDWORKS Premium 2025 SP5.0 和官方 Interop 33.5.0.53 上完成生产构建、COM 安装与加载和命令打开验证。轻量化装配体按需文档生命周期、完整 STEP/STL、装配体 Asset Pack and Go 和 SLDDRW 产物仍需完成最终现场验收。SOLIDWORKS 2026 尚未实机验证。
 
 ## 自定义属性
+
+零件和装配体模板默认将“是否为资产”设为“否”。选“是”后显示资产属性。装配体选“否”时显示“工位属性”，勾选“工位（Workstation）”后填写工位名称。将已标记的工位改为资产时，先取消勾选“工位”，再将“是否为资产”改为“是”。装配包版本始终可填写。已有旧工位字段的模型，填写新字段时应沿用现有的工位标记和名称。
 
 工位装配体使用文件级 `is_workstation=true|1|yes` 标记，兼容既有模型的 `is-workstation`；名称使用 `workstation_name`，兼容 `workstationname`。两种写法同时存在时必须一致，名称不能为空。分类预览会汇总缺失名称的问题并阻止导出；XML 输出 `kind="workstation"` 和 `workstation_name`，保留工位层级及相对位姿。非 Asset 的普通装配体有子节点时输出 `kind="group"`；空工位仍保留为 workstation，不降为 group 或 meshes。
 
@@ -71,11 +73,11 @@ asset_version = 1          # 必填正整数
 
 rc3 可以在“承载关系 → 接口属性 / 建议…”中填写接口，并从选定子组件的 `connection_interface` 生成 `accepts_interfaces` 建议，核对后保存到源模型文件级属性；无需反复进入 SW 属性页。已有接受接口保留，修改默认要求资产升版。
 
-接口库补充包提供 103 个按 `类别.规格[.尺寸/型号]` 命名的候选，并将属性模板中的两项接口改为只读展示。旧属性和旧名称保留；应用现有模板补丁使用 `Install-InterfaceOptions.ps1`，见 [接口库与模板说明](docs/INTERFACE_CATALOG_GUIDE.md)。
+接口库补充包提供 103 个按 `类别.规格[.尺寸/型号]` 命名的候选。属性模板按 Tool、Fixture 和快换角色只读展示相应接口。普通资产需要建立承载关系时，可直接在插件中填写对应接口。旧属性和旧名称保留；应用现有模板补丁使用 `Install-InterfaceOptions.ps1`，见 [接口库与模板说明](docs/INTERFACE_CATALOG_GUIDE.md)。
 
 ### Asset 属性填写说明
 
-以下属性必须填写在模型文件级“自定义”页；配置特定属性会被插件忽略。`asset_attr` 只是 Property Tab Builder 中的界面分组标题，不是需要写入模型的属性。Asset 的 `零件名` 缺失或为空白时，分类预览会在完成全部可执行检查后统一列出并禁止导出。
+下表属性使用模型文件级“自定义”页。必填项取决于资产角色和承载关系。普通 Asset 的 `零件名` 和 `设计目的` 缺失或为空白时，分类预览会在完成全部可执行检查后统一列出并禁止导出。
 
 | 属性 | 类型/格式 | 填写说明 |
 | --- | --- | --- |
@@ -115,15 +117,15 @@ rc3 可以在“承载关系 → 接口属性 / 建议…”中填写接口，�
 - `has_QRcode=1`：`QR_num` 填写大于 `0` 的数量，并填写 `QR_size`；数量大于 `1` 时再按项目统一口径填写 `QR_spacing`。
 - 尺寸和间距的单位、测量基准必须由项目统一约定；当前模板和导出程序不会自动换算。
 
-> **零件模板兼容性说明：** `templates/custom-properties/part.prtprp` 中可见标签是 `QR_num`，但当前 `v1.0.3` 模板实际写入的自定义属性名是 `号数30`；`templates/custom-properties/asem.asmprp` 才写入 `QR_num`。因此零件 Asset 的 manifest 会保留 `号数30`，不会自动重命名为 `QR_num`。
+> 当前零件和装配体模板均使用 `QR_num` 保存二维码数量。已用旧模板写入的 `号数30` 会保留在原模型和导出属性中。
 
 条件填写约定：
 
 - `is_tool=true` 时必须填写 `connection_interface`；工具可直接安装到 Robot，也可通过成对快换盘安装。
-- `is_fixture=true` 时必须填写 `accepts_interfaces`，并按需要填写 `slots_num`。
+- `is_fixture=true` 时可按需填写 `slots_num`。仅标记为 Fixture 且没有承载关系时，接口可留空。
 - `is_quick_changer=true` 时必须同时填写 `quick_changer_side`、`connection_interface` 和 `accepts_interfaces`。
 - `is_quick_changer_rack=true` 时必须使用 `class=station` 并填写 `accepts_interfaces`。
-- `class=robot` 必须填写 `accepts_interfaces`，且不能同时标记为 Tool、Fixture、快换盘或快换架。
+- `class=robot` 的 `accepts_interfaces` 可留空。Robot 不能同时标记为 Tool、Fixture、快换盘或快换架。
 - 接口名称采用精确匹配并描述真实机械兼容性。螺栓法兰使用明确的孔数、螺纹和分度圆信息，例如 `法兰-4xM6-PCD30`；容纳类接口使用对象类型和决定兼容性的几何特征，例如 `试管-D20`，不单独使用容量名称。快换盘上下盘之间使用独立的快换配对接口名称。
 - `is_adjustable=true` 只表示安装位姿可调，不表示 Asset 的所有机械或工艺参数均可调。
 

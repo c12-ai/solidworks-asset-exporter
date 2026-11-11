@@ -32,7 +32,10 @@ namespace SolidWorksAssetExporter.Core.Tests
                 Equal(0, InterfaceEditRules.Changes(s, "", new[] { "old" }, 99, false).Count);
             });
             Run("Interface editor preserves role validation and blocks linked fields", delegate {
-                var s = InterfaceSnapshot(); Throws<ValidationException>(() => InterfaceEditRules.Changes(s, "", new string[0], 2, false));
+                var s = InterfaceSnapshot();
+                Equal("", InterfaceEditRules.Changes(s, "", new string[0], 2, false)[PropertyRules.AcceptsInterfaces]);
+                var tool = InterfaceSnapshot(); tool.Values[PropertyRules.IsTool] = "1";
+                Throws<ValidationException>(() => InterfaceEditRules.Changes(tool, "", new[] { "old" }, 2, false));
                 s.Linked.Add("accepts_interfaces"); Throws<ValidationException>(() => InterfaceEditRules.Changes(s, "", new[] { "tip" }, 2, false));
                 Throws<ValidationException>(() => InterfaceEditRules.Changes(InterfaceSnapshot(), "x;y", new[] { "old" }, 2, false));
             });

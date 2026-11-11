@@ -8,7 +8,7 @@ using SolidWorksAssetExporter.Core;
 
 namespace SolidWorksAssetExporter.AddIn
 {
-    public sealed class InstanceBindingDialog : Form
+    public sealed partial class InstanceBindingDialog : Form
     {
         private readonly SldWorks _app;
         private readonly ModelDoc2 _document;
@@ -79,7 +79,8 @@ namespace SolidWorksAssetExporter.AddIn
             editBar.Controls.Add(Button("接口属性 / 建议…", EditInterfaces));
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 155)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            footer.Controls.Add(Button("保存总装配", SaveAssembly)); footer.Controls.Add(_state); layout.Controls.Add(footer, 0, 8); Controls.Add(layout);
+            footer.Controls.Add(Button("保存总装配", SaveAssembly)); footer.Controls.Add(_state); layout.Controls.Add(footer, 0, 8);
+            InitializeBindingPages(layout);
             _parents.SelectionChanged += delegate { if (!_rendering) RenderDetails(); };
             _details.CellDoubleClick += delegate { Guard(delegate { Highlight(SelectedRecords().SelectMany(r => new[] { r.Parent, r.Child })); }); };
             _search.TextChanged += delegate { RenderGroups(); };
@@ -95,7 +96,7 @@ namespace SolidWorksAssetExporter.AddIn
             _selectionEvents = _document as DAssemblyDocEvents_Event;
             if (_selectionEvents != null) _selectionEvents.NewSelectionNotify += SelectionChanged;
             FormClosed += delegate { _timer.Dispose(); if (_selectionEvents != null) { try { _selectionEvents.NewSelectionNotify -= SelectionChanged; } catch { } } };
-            Guard(delegate { RefreshDraft(); RefreshRelations(); }); _timer.Start();
+            Guard(delegate { RefreshDraft(); RefreshRelations(true); }); _timer.Start();
         }
         private static DataGridView Grid(bool multi)
         {
@@ -207,25 +208,25 @@ namespace SolidWorksAssetExporter.AddIn
         {
             _session.RequireWritable();
             if (_draft.Parent == null || _draft.Children.Count == 0) throw new ValidationException("请选择一个父组件和至少一个子组件。");
-            var plan = Plan(); var records = _session.Current.Relations;
+            var plan = Plan(); var records = _session.Current.Relations; var revision = _session.Revision;
             var proposed = InstanceBindingRules.Apply(records, _draft.Parent, _draft.Children, e => _session.Resolve(e, plan), replace);
-            if (!ConfirmBatch(records, replace)) return;
-            _session.Commit(proposed); _draft.Applied(_chain.Checked); _document.ClearSelection2(true); _continuous.Checked = false;
+            if (!ConfirmBatch(records, replace, _draft.Parent, _draft.Children)) return;
+            CommitRelations(proposed, revision); _draft.Applied(_chain.Checked); _document.ClearSelection2(true); _continuous.Checked = false;
             RefreshDraft(); RefreshRelations();
             if (_draft.Parent != null) _continuous.Checked = true;
             _hint = _draft.NextParents.Count > 0 ? "已绑定。请从“下一父组件”选择一个已绑定子组件，继续下一层。" :
                 _draft.Parent != null ? "已绑定，子组件已接续为父组件。继续点选下一层子组件。" : "已绑定并清空本轮选择，可读取下一父组件。请保存总装配。";
         }
-        private bool ConfirmBatch(List<InstanceBinding> records, bool replace)
+        private bool ConfirmBatch(List<InstanceBinding> records, bool replace, BindingEndpoint parent, IList<BindingEndpoint> children)
         {
             using (var dialog = new Form { Text = replace ? "确认替换全部父组件（仅保留本轮父组件）" : "确认新增绑定（保留已有父组件）", Size = new Size(980, 540), StartPosition = FormStartPosition.CenterParent, Font = Font, MinimizeBox = false, MaximizeBox = false })
             {
                 var table = Grid(false); table.Columns.Add("child", "子组件"); table.Columns.Add("old", replace ? "全部已有父组件（将被替换）" : "已有父组件（保留）"); table.Columns.Add("next", "本轮父组件");
-                foreach (var c in _draft.Children)
-                { var old = BindingEditorState.Parents(records, c); table.Rows.Add(Display(c), old.Count == 0 ? "未绑定" : string.Join(System.Environment.NewLine, old.Select(Display)), Display(_draft.Parent)); }
+                foreach (var c in children)
+                { var old = BindingEditorState.Parents(records, c); table.Rows.Add(Display(c), old.Count == 0 ? "未绑定" : string.Join(System.Environment.NewLine, old.Select(Display)), Display(parent)); }
                 table.DefaultCellStyle.WrapMode = DataGridViewTriState.True; table.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
                 var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = FlowDirection.RightToLeft };
-                var ok = new Button { Text = "确认 " + _draft.Children.Count + " 项", AutoSize = true, DialogResult = DialogResult.OK };
+                var ok = new Button { Text = "确认 " + children.Count + " 项", AutoSize = true, DialogResult = DialogResult.OK };
                 var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel }; buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
                 dialog.Controls.Add(table); dialog.Controls.Add(buttons); dialog.AcceptButton = ok; dialog.CancelButton = cancel;
                 return dialog.ShowDialog(this) == DialogResult.OK;
@@ -251,9 +252,23 @@ namespace SolidWorksAssetExporter.AddIn
         {
             var group = SelectedGroup();
             var selected = wholeGroup ? _views.Where(v => v.Record.Parent.Context == group).Select(v => v.Record).ToList() : SelectedRecords();
-            if (selected.Count == 0) throw new ValidationException("请先选择父组件组。");
-            if (MessageBox.Show(this, "解除" + (wholeGroup ? "整个父组件组的 " : "所选 ") + selected.Count + " 条关系？\n这些子组件与其他父组件的关系会保留。", "解除绑定", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
-            var ids = new HashSet<string>(selected.Select(r => r.Id)); _session.Commit(_session.Current.Relations.Where(r => !ids.Contains(r.Id)).ToList()); RefreshRelations();
+            RemoveRelations(selected);
+        }
+        private void RemoveRelations(IList<InstanceBinding> selected)
+        {
+            if (selected.Count == 0) throw new ValidationException("请先选择要解除的关系。");
+            var revision = _session.Revision;
+            var current = _session.Current.Relations;
+            if (MessageBox.Show(this, "解除所选 " + selected.Count + " 条关系？\n未选中的关系会保留。", "解除绑定", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+            var ids = new HashSet<string>(selected.Select(r => r.Id));
+            CommitRelations(current.Where(r => !ids.Contains(r.Id)).ToList(), revision);
+            RefreshRelations();
+        }
+        private void CommitRelations(List<InstanceBinding> proposed, long revision)
+        {
+            EnsureContext();
+            if (_session.Revision != revision) throw new ValidationException("关系在确认期间已改变，请刷新后重试。");
+            _session.Commit(proposed);
         }
         private void Highlight(IEnumerable<BindingEndpoint> endpoints)
         {
@@ -268,7 +283,9 @@ namespace SolidWorksAssetExporter.AddIn
             int error = 0, warning = 0;
             // Same document save path as Ctrl+S; binding storage commits only on native save events.
             if (!_document.Save3(0, ref error, ref warning) || error != 0) throw new ValidationException("总装配保存未完成，错误码：" + error + "。" + _session.LastSaveError);
-            _session.RequireSaved(); RefreshSaveStatus(); _hint = "总装配已保存；导出前请重新分类预览。";
+            _session.RequireSaved();
+            _hint = _treeHint = "总装配已保存。导出前请重新分类预览。";
+            RefreshSaveStatus();
         }
         private void EditInterfaces()
         {
@@ -280,15 +297,22 @@ namespace SolidWorksAssetExporter.AddIn
             if (endpoints.Count == 0) endpoints.AddRange(Selection(SelectionIndex(plan)));
             endpoints = endpoints.GroupBy(e => e.Context).Select(g => g.First()).ToList();
             if (endpoints.Count == 0) throw new ValidationException("请先读取父/子组件、选择已有父组件组，或在 SW 中选中一个普通 Asset。");
+            var candidates = _draft.Parent == null ? Enumerable.Empty<InstanceBinding>() :
+                _draft.Children.Select(child => new InstanceBinding { Parent = _draft.Parent, Child = child });
+            ShowInterfaceEditor(plan, endpoints, candidates);
+        }
+        private void ShowInterfaceEditor(AssemblyExportPlan plan, IEnumerable<BindingEndpoint> endpoints, IEnumerable<InstanceBinding> candidates)
+        {
+            _continuous.Checked = false;
+            var childRelations = _session.Current.Relations.Concat(candidates).ToList();
             var assets = new List<InterfaceAsset>();
-            foreach (var group in endpoints.GroupBy(e => e.SourcePath, StringComparer.OrdinalIgnoreCase))
+            foreach (var group in endpoints.GroupBy(e => e.Context).Select(g => g.First()).GroupBy(e => e.SourcePath, StringComparer.OrdinalIgnoreCase))
             {
                 // Resolve every occurrence: a replaced/invalid child may not be hidden by source grouping.
                 var nodes = group.Select(e => _session.Resolve(e, plan)).ToList();
                 var asset = new InterfaceAsset { Endpoint = group.First(), Source = (SwCadNode)nodes[0].Source, InstanceCount = group.Count() };
                 var contexts = new HashSet<string>(group.Select(e => e.Context));
-                asset.Children.AddRange(records.Where(r => contexts.Contains(r.Parent.Context)).Select(r => r.Child));
-                if (_draft.Parent != null && contexts.Contains(_draft.Parent.Context)) asset.Children.AddRange(_draft.Children);
+                asset.Children.AddRange(childRelations.Where(r => contexts.Contains(r.Parent.Context)).Select(r => r.Child));
                 asset.Reload(); assets.Add(asset);
             }
             var names = new List<string>();
@@ -303,7 +327,7 @@ namespace SolidWorksAssetExporter.AddIn
             {
                 editor.ShowDialog(this);
                 // Never keep a cached classification/version snapshot after editing shared source files.
-                _selectionNodes = null; RefreshRelations();
+                _selectionNodes = null; RefreshRelations(editor.SavedAny);
                 if (_draft.Parent != null || _draft.Children.Count > 0 || _draft.NextParents.Count > 0)
                 {
                     var fresh = Plan();
@@ -314,7 +338,7 @@ namespace SolidWorksAssetExporter.AddIn
                 RefreshSaveStatus();
             }
         }
-        private void RefreshRelations()
+        private void RefreshRelations(bool refreshTree = false)
         {
             AssemblyExportPlan plan = null; string planError = null;
             try { plan = Plan(); } catch (ValidationException ex) { planError = "当前不可导出：" + ex.Message; }
@@ -330,7 +354,9 @@ namespace SolidWorksAssetExporter.AddIn
                 catch (ValidationException ex) { v.Error = ex.Message; }
                 _views.Add(v);
             }
-            RenderGroups(); RefreshSaveStatus();
+            RenderGroups();
+            RefreshAssemblyTree(plan, planError, refreshTree);
+            RefreshSaveStatus();
         }
         private string SelectedGroup()
         { return _parents.SelectedRows.Count == 0 ? null : _parents.SelectedRows[0].Tag as string; }
@@ -369,6 +395,7 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (DataGridViewRow row in _details.Rows) if (((RelationView)row.Tag).Error == null && (string)row.Cells[2].Value != status) row.Cells[2].Value = status;
             _state.Text = (_session.Pending ? "已应用，待保存总装配。" : "当前关系已保存。") + (_session.LastSaveError ?? "") + "\r\n" + _hint +
                 "\r\n未绑定不表示已确认空；修改后请保存并重新分类预览。";
+            RefreshTreeSaveStatus();
         }
         private static string Label(string path, string assetId) { return (path ?? "").Split('/').LastOrDefault() + " | " + assetId + " | " + path; }
         private static string Display(BindingEndpoint e) { return Label(e.DisplayPath, e.AssetId); }

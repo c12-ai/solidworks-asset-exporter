@@ -2730,6 +2730,7 @@ namespace SolidWorksAssetExporter.Core.Tests
         public int DocumentType { get; set; }
         public FakeModelDocExtension ExtensionValue { get; private set; }
         public ConfigurationManager ConfigurationManager { get { return null; } }
+        public FeatureManager FeatureManager { get { return null; } }
         public ModelDocExtension Extension { get { return ExtensionValue; } }
         public object SelectionManager { get { return null; } }
         int ModelDoc2.GetType() { return DocumentType == 0 ? (int)swDocumentTypes_e.swDocPART : DocumentType; }

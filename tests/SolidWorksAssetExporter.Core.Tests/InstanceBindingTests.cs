@@ -27,6 +27,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Binding AT-10 cross-group multilevel chains are allowed", BindingChains);
             Run("Binding AT-03 unsupported endpoints do not expand Asset boundaries", BindingEndpointKinds);
             Run("Binding AT-11 required interfaces and role chains are revalidated", BindingInterfaces);
+            Run("Optional Asset interfaces are required on explicit binding endpoints", BindingOptionalInterfaces);
             Run("Binding rack supports direct tools and changer children in exported packages", BindingRackTools);
             Run("Binding direct rack tools retain interface checks and support shared tools", BindingRackToolGuards);
             Run("Binding direct rack tool support preserves other changer role restrictions", BindingRackToolRoleGuards);
@@ -195,6 +196,49 @@ namespace SolidWorksAssetExporter.Core.Tests
             f.Nodes["T1"].Properties[PropertyRules.QuickChangerSide] = "tool_side";
             f.Apply("A", false, "T1"); Equal(1, f.Export().Relations.Count);
         }
+
+        private static void BindingOptionalInterfaces()
+        {
+            var f = new BindingFixture();
+            var parent = f.Nodes["A"].Properties;
+            var child = f.Nodes["T1"].Properties;
+            var robot = new Dictionary<string, string> { { PropertyRules.AssetClass, "robot" } };
+            parent[PropertyRules.AssetClass] = "station";
+            parent[PropertyRules.IsFixture] = "1";
+            child[PropertyRules.AssetClass] = "movable";
+            foreach (var properties in new[] { parent, child, robot })
+            {
+                properties.Remove(PropertyRules.ConnectionInterface);
+                properties.Remove(PropertyRules.AcceptsInterfaces);
+                Equal(0, PropertyRules.ValidateAssetConnectionProperties(properties).Count);
+                properties[PropertyRules.ConnectionInterface] = " ";
+                properties[PropertyRules.AcceptsInterfaces] = string.Empty;
+                Equal(0, PropertyRules.ValidateAssetConnectionProperties(properties).Count);
+            }
+            Equal(0, f.Export().Relations.Count);
+
+            robot[PropertyRules.IsFixture] = "1";
+            True(PropertyRules.ValidateAssetConnectionProperties(robot).Single().Contains("[class]=robot"));
+            child[PropertyRules.IsTool] = "1";
+            True(PropertyRules.ValidateAssetConnectionProperties(child).Single().Contains(PropertyRules.ConnectionInterface));
+            child.Remove(PropertyRules.IsTool);
+            parent[PropertyRules.IsQuickChangerRack] = "1";
+            True(PropertyRules.ValidateAssetConnectionProperties(parent).Single().Contains(PropertyRules.AcceptsInterfaces));
+            parent.Remove(PropertyRules.IsQuickChangerRack);
+
+            parent[PropertyRules.AcceptsInterfaces] = "test-D20";
+            child[PropertyRules.ConnectionInterface] = "test-D20";
+            f.Apply("A", false, "T1");
+            Equal(1, f.Export().Relations.Count);
+            parent.Remove(PropertyRules.AcceptsInterfaces);
+            Throws<ValidationException>(() => f.Export());
+            parent[PropertyRules.AcceptsInterfaces] = "test-D20";
+            child[PropertyRules.ConnectionInterface] = " ";
+            Throws<ValidationException>(() => f.Export());
+            child[PropertyRules.ConnectionInterface] = "mismatch";
+            Throws<ValidationException>(() => f.Export());
+        }
+
         private static BindingFixture RackToolFixture()
         {
             var f = new BindingFixture();
@@ -485,6 +529,7 @@ namespace SolidWorksAssetExporter.Core.Tests
         public string get_SummaryInfo(int field) { return "test"; }
         public bool IsOpenedReadOnly() { return false; } public bool Visible { get; set; }
         public ConfigurationManager ConfigurationManager { get { return Config; } }
+        public FeatureManager FeatureManager { get { return null; } }
         public ModelDocExtension Extension { get { return null; } }
         public object SelectionManager { get { return null; } }
         public void ClearSelection2(bool all) { } public bool ShowConfiguration2(string name) { return true; }

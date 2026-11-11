@@ -94,7 +94,7 @@ is_quick_changer      = 0
 is_quick_changer_rack = 0
 ```
 
-Robot 的 `accepts_interfaces` 表示机器人末端可接受的安装接口。
+Robot 可用 `accepts_interfaces` 记录末端可接受的安装接口。显式承载关系的端点只支持普通 Asset 实例。
 
 ### 4.2 Tool
 
@@ -156,6 +156,8 @@ is_quick_changer_rack = 1
 ```text
 父级.accepts_interfaces CONTAINS 子级.connection_interface
 ```
+
+对于 SOLIDWORKS 中的显式承载关系，父级的接受接口和子级的连接接口都不能为空，匹配时区分大小写。
 
 两个字段的含义不得互换：
 
@@ -232,16 +234,14 @@ is_quick_changer_rack=1
 is_tool=1
     => connection_interface 非空
 
-is_fixture=1
-    => accepts_interfaces 非空
-
 class=robot
-    => accepts_interfaces 非空
     => is_tool=0
     => is_fixture=0
     => is_quick_changer=0
     => is_quick_changer_rack=0
 ```
+
+没有显式承载关系时，普通资产（包括仅标记为 Fixture 的资产）和 Robot 可以留空接口。Tool、快换盘和快换架仍须满足上述角色的接口约束。
 
 二维码组合：
 

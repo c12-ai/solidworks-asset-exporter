@@ -63,7 +63,9 @@ is_fixture = 1
 | `connection_interface` | 当前资产作为子级时，用什么接口连接父级。只能表示一个接口。 | `法兰-4xM6-PCD30` |
 | `accepts_interfaces` | 当前资产作为父级时，可以接受哪些子级接口。多个接口用英文分号 `;` 分隔。 | `法兰-4xM6-PCD30;法兰-4xM8-PCD40` |
 
-父子接口关系：
+没有显式承载关系时，普通资产（包括仅标记为 Fixture 的资产）和 Robot 可以留空接口。Tool 仍须填写 `connection_interface`，快换盘仍须填写两个接口字段，快换架仍须填写 `accepts_interfaces`。
+
+建立显式承载关系时，父级的接受接口列表必须包含子级的连接接口名称，并且名称须完全一致。
 
 ```text
 父级.accepts_interfaces
@@ -78,7 +80,7 @@ is_fixture = 1
 工具.connection_interface = 法兰-4xM6-PCD30
 ```
 
-表示该工具可以直接连接机器人。
+该示例表示工具与机器人的机械兼容性。Robot 的接口可以作为元数据填写。显式承载关系的端点只支持普通 Asset 实例。
 
 接口名称必须表达决定兼容性的机械特征：
 

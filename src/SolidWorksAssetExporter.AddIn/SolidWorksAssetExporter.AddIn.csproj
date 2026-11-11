@@ -55,6 +55,9 @@
     <Compile Include="SwAddin.cs" />
     <Compile Include="SwInstanceBindings.cs" />
     <Compile Include="InstanceBindingDialog.cs" />
+    <Compile Include="InstanceBindingDialog.Tree.cs" />
+    <Compile Include="BindingAssemblyTree.cs" />
+    <Compile Include="BindingRelationsView.cs" />
     <Compile Include="BindingEditorState.cs" />
     <Compile Include="InterfaceEditing.cs" />
     <Compile Include="SwInterfaceProperties.cs" />

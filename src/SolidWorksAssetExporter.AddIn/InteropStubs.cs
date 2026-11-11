@@ -63,9 +63,29 @@ namespace SolidWorks.Interop.sldworks
         bool Save3(int options, ref int errors, ref int warnings);
         bool Visible { get; set; }
         ConfigurationManager ConfigurationManager { get; }
+        FeatureManager FeatureManager { get; }
         ModelDocExtension Extension { get; }
         object SelectionManager { get; }
         void ClearSelection2(bool all); bool ShowConfiguration2(string name);
+    }
+
+    public interface Feature
+    {
+        string GetTypeName2();
+    }
+
+    public interface FeatureManager
+    {
+        TreeControlItem GetFeatureTreeRootItem2(int pane);
+    }
+
+    public interface TreeControlItem
+    {
+        string Text { get; }
+        int ObjectType { get; }
+        object Object { get; }
+        TreeControlItem GetFirstChild();
+        TreeControlItem GetNext();
     }
 
     public interface DrawingDoc : ModelDoc2
@@ -132,6 +152,8 @@ namespace SolidWorks.Interop.sldworks
 
 namespace SolidWorks.Interop.swconst
 {
+    public enum swFeatMgrPane_e { swFeatMgrPaneTop = 0, swFeatMgrPaneBottom = 1 }
+    public enum swTreeControlItemType_e { swFeatureManagerItem_Feature = 1, swFeatureManagerItem_Component = 2 }
     public enum swComponentVisibilityState_e { swComponentHidden = 0, swComponentVisible = 1, swComponentUnknown = -1 }
     public enum swComponentSuppressionState_e { swComponentSuppressed = 0, swComponentLightweight = 1, swComponentFullyResolved = 2, swComponentResolved = 3, swComponentFullyLightweight = 4, swComponentInternalIdMismatch = 5 }
     public enum swComponentResolveStatus_e { swResolveOk = 0, swResolveAbortedByUser = 1, swResolveNotPerformed = 2, swResolveError = 3 }
