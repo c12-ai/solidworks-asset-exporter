@@ -17,7 +17,7 @@ class RepairLocalModels
         foreach (var name in new [] {"25ml离心管盒支架", "25ml移液管", "25ml移液管盒", "1.5ml离心管", "1.5ml离心管架", "50ml离心管", "50ml离心管架", "BSC内部组件安装底板", "桌子 枪头盒-1000uL", "锥形瓶底板", "125ml锥形瓶底座", "培养箱底板", "1000ml圆形瓶", "水浴锅"})
             Set(name + ".SLDPRT", "asset_version", "2");
         foreach (var name in new [] {"1000ml圆形瓶", "1.5ml离心管", "50ml离心管", "500ml圆形瓶", "移液枪头-1000uL"})
-            Set(name + ".SLDPRT", "accepts_interfaces", "细胞样本");
+            Set(name + ".SLDPRT", "can_hold_contents", "1");
         Set("BSC内部组件安装底板.SLDPRT", "accepts_interfaces", "锥形瓶底板;1.5ml离心管架;50ml离心管架;培养基瓶底座;枪头盒;电动助吸器支架;移液器支架");
         Set("BSC内部组件安装底板.SLDPRT", "connection_interface", "");
         Set("移液器支架总装.SLDASM", "class", "station");

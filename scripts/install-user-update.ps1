@@ -1,4 +1,8 @@
-param([string]$PayloadDirectory)
+param(
+    [string]$PayloadDirectory,
+    [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9._-]*$')]
+    [string]$InstallVersion
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (Get-Process SLDWORKS -ErrorAction SilentlyContinue) { throw 'Close SOLIDWORKS before updating the add-in.' }
@@ -13,9 +17,11 @@ $machineKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\SolidWorks\Addins\' + $clsi
 if (-not (Test-Path -LiteralPath $machineKey)) { throw 'An existing machine registration is required. For a first install, run Install.cmd as administrator.' }
 $userKey = 'Registry::HKEY_CURRENT_USER\Software\Classes\CLSID\' + $clsid + '\InprocServer32'
 if (-not (Test-Path -LiteralPath $userKey)) { throw 'This update requires an existing per-user COM registration. Use Install.cmd for a first install.' }
-$install = Join-Path $env:LOCALAPPDATA 'SolidWorksAssetExporter\Addin'
+$installName = if ($InstallVersion) { 'Addin-' + $InstallVersion } else { 'Addin' }
+$install = Join-Path (Join-Path $env:LOCALAPPDATA 'SolidWorksAssetExporter') $installName
+if ($InstallVersion -and (Test-Path -LiteralPath $install)) { throw "Versioned installation already exists: $install" }
 $backup = Join-Path $env:LOCALAPPDATA ('SolidWorksAssetExporter\UpdateBackups\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-$files = @('SolidWorksAssetExporter.AddIn.dll','SolidWorksAssetExporter.Core.dll','SolidWorks.Interop.sldworks.dll','SolidWorks.Interop.swconst.dll','SolidWorks.Interop.swpublished.dll')
+$files = @('SolidWorksAssetExporter.AddIn.dll','SolidWorksAssetExporter.Core.dll','SolidWorksAssetExporter.Mcp.exe','SolidWorks.Interop.sldworks.dll','SolidWorks.Interop.swconst.dll','SolidWorks.Interop.swpublished.dll')
 foreach ($name in $files) {
     if (-not (Test-Path -LiteralPath (Join-Path $PayloadDirectory $name) -PathType Leaf)) { throw "Missing payload: $name" }
 }
@@ -35,6 +41,11 @@ foreach ($name in $files) {
     if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash) { throw "Hash mismatch: $name" }
 }
 $codebase = ([Uri](Join-Path $install 'SolidWorksAssetExporter.AddIn.dll')).AbsoluteUri
-foreach ($registration in $registrations) { Set-ItemProperty -LiteralPath $registration -Name CodeBase -Value $codebase }
+try {
+    foreach ($registration in $registrations) { Set-ItemProperty -LiteralPath $registration -Name CodeBase -Value $codebase }
+} catch {
+    foreach ($record in $saved) { Set-ItemProperty -LiteralPath $record.Path -Name CodeBase -Value $record.CodeBase }
+    throw
+}
 Write-Output "Installed user update: $install"
 Write-Output "Rollback registration backup: $backup\com-codebases.json"

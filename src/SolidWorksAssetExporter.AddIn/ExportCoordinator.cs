@@ -3,7 +3,12 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Web.Script.Serialization;
+using System.Xml;
+using System.Xml.Linq;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using SolidWorksAssetExporter.Core;
@@ -21,6 +26,8 @@ namespace SolidWorksAssetExporter.AddIn
             SourceFileSnapshots = new Dictionary<string, ExportSourceFileSnapshot>(StringComparer.OrdinalIgnoreCase);
             DocumentUpdateStamps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             ValidationErrors = new List<string>();
+            PlacementDiagnostics = new List<ExportPlacementDiagnostic>();
+            ContactDiagnostics = new List<ContactDiagnostic>();
             CanExport = true;
         }
         public AssemblyExportPlan Plan { get; internal set; }
@@ -32,6 +39,8 @@ namespace SolidWorksAssetExporter.AddIn
         public bool CanExport { get; internal set; }
         public IList<string> UnsupportedAssetRoots { get; private set; }
         public IList<string> ValidationErrors { get; private set; }
+        public IList<ExportPlacementDiagnostic> PlacementDiagnostics { get; internal set; }
+        public IList<ContactDiagnostic> ContactDiagnostics { get; internal set; }
         internal IDictionary<string, AssetInspection> AssetInspections { get; private set; }
         internal IDictionary<string, string> AssetVersionMessages { get; private set; }
         internal IDictionary<string, string> ProjectFingerprints { get; private set; }
@@ -41,11 +50,13 @@ namespace SolidWorksAssetExporter.AddIn
         internal string ActiveDocumentPath { get; set; }
         internal string ActiveConfigurationName { get; set; }
         internal long BindingRevision { get; set; }
+        internal int? SuggestedProjectVersion { get; set; }
     }
 
     internal sealed class AssetInspection
     {
         public SwCadNode Node { get; set; }
+        public string SourcePath { get; set; }
         public string Uuid { get; set; }
         public string Fingerprint { get; set; }
         public int Version { get; set; }
@@ -59,6 +70,7 @@ namespace SolidWorksAssetExporter.AddIn
         public bool RequiresLocalPackageRebuild { get; set; }
         public string LocalPackageError { get; set; }
         public IDictionary<string, string> Properties { get; set; }
+        public bool CanHoldContents { get; set; }
         public bool ReuseRemotePackage { get; set; }
         public string SemanticMismatchReason { get; set; }
     }
@@ -90,6 +102,7 @@ namespace SolidWorksAssetExporter.AddIn
         private readonly SwGeometryExporter _geometry;
         private readonly SwPluginMutationTracker _mutationTracker;
         private readonly WanxiangRegistryProvider _registryProvider;
+        internal SwPluginMutationTracker MutationTracker { get { return _mutationTracker; } }
 
         public ExportCoordinator(SldWorks app)
         {
@@ -122,8 +135,8 @@ namespace SolidWorksAssetExporter.AddIn
             var root = SwAssemblyRoot.FromActiveDocument(_app, _mutationTracker);
             var classificationIssues = new List<string>();
             var requiredPropertyIssues = new List<string>();
-            CollectClassificationAndRequiredPropertyIssues(root, true, settings.ExportProject, classificationIssues,
-                requiredPropertyIssues, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            var assetProperties = new Dictionary<string, IDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            CollectClassificationAndRequiredPropertyIssues(root, classificationIssues, requiredPropertyIssues, assetProperties);
             if (classificationIssues.Count != 0)
             {
                 var allIssues = classificationIssues.Concat(requiredPropertyIssues)
@@ -150,10 +163,33 @@ namespace SolidWorksAssetExporter.AddIn
                 Plan = plan,
                 PlanFingerprint = CalculatePlanFingerprint(plan)
             };
+            var assetNodes = Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Asset).ToList();
             if (bindings != null)
             {
                 result.BindingRevision = bindings.Revision;
-                try { plan.Relations = bindings.Export(plan); }
+                try
+                {
+                    plan.Relations = ExportRelations(bindings, plan);
+                    if (settings.ExportProject)
+                    {
+                        var active = bindings.Current;
+                        result.PlacementDiagnostics = ExportPlacementDiagnostics.Analyze(assetNodes, plan.Relations,
+                            node => assetProperties[AssetPropertyKey((SwCadNode)node.Source)], new ExportPlacementReviewContext
+                            {
+                                Configuration = active.ConfigurationName,
+                                ConfigurationId = active.ConfigurationId,
+                                ReferencedConfiguration = node => ((SwCadNode)node.Source).ReferencedConfiguration,
+                                OccurrenceIdentity = PlacementReviewOccurrence,
+                                Reasons = ReadPlacementReviews(plan.AssemblyUuid)
+                            });
+                        result.ContactDiagnostics = SwContactDiagnostics.ForExport(_app, _app.ActiveDoc as ModelDoc2, assetNodes, plan.Relations);
+                        foreach (var diagnostic in result.PlacementDiagnostics.Where(value => value.IsBlocking))
+                        {
+                            result.CanExport = false;
+                            AddValidationError(result, diagnostic.Message);
+                        }
+                    }
+                }
                 catch (ValidationException ex) { AddValidationError(result, ex.Message); }
                 result.PlanFingerprint = CalculatePlanFingerprint(plan);
             }
@@ -162,8 +198,11 @@ namespace SolidWorksAssetExporter.AddIn
                 result.CanExport = false;
                 AddValidationError(result, issue);
             }
-            var assetNodes = Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Asset).ToList();
             var registry = registrySnapshot.Registry;
+            var exportNames = ResolveAssetExportNames(assetNodes,
+                registry.Assets.Concat(AssetRegistryStore.LocalPackageNames(settings.AssetLibraryRoot)));
+            var acceptedAssets = plan.Relations.Relations.Where(relation => relation.Placement != null)
+                .ToLookup(relation => relation.Placement.ParentAssetUuid, relation => relation.Placement.ChildAssetUuid, StringComparer.Ordinal);
             var inspectionCache = new Dictionary<string, AssetInspection>(StringComparer.OrdinalIgnoreCase);
             using (var fileHashes = new FileFingerprintCache())
             {
@@ -210,7 +249,9 @@ namespace SolidWorksAssetExporter.AddIn
                         AssetInspection inspection;
                         if (!inspectionCache.TryGetValue(cacheKey, out inspection))
                         {
-                            inspection = InspectAsset(source, node, fileHashes);
+                            string name;
+                            exportNames.TryGetValue(node.GeometryUuid, out name);
+                            inspection = InspectAsset(source, node, fileHashes, name, acceptedAssets[node.GeometryUuid]);
                             inspectionCache.Add(cacheKey, inspection);
                         }
                         inspections.Add(inspection);
@@ -242,8 +283,9 @@ namespace SolidWorksAssetExporter.AddIn
                     current.VersionDecision = decision;
                     if (decision.Kind == AssetVersionDecisionKind.UpgradeRequired)
                     {
+                        if (!decision.SuggestedVersion.HasValue) throw new ValidationException("asset_version 已达到上限。");
                         current.RequiresVersionUpgrade = true;
-                        current.SuggestedVersion = decision.SuggestedVersion ?? current.Version + 1;
+                        current.SuggestedVersion = decision.SuggestedVersion.Value;
                     }
                     string packageError = null;
                     if (decision.CanExport)
@@ -252,7 +294,8 @@ namespace SolidWorksAssetExporter.AddIn
                         {
                             current.State = AssetManifestValidator.Inspect(
                                 AssetVersionDirectory(settings, assetNode.GeometryUuid, current.Version),
-                                assetNode.GeometryUuid, current.Version, current.Fingerprint, fileHashes.Sha256);
+                                assetNode.GeometryUuid, current.Version, current.Fingerprint, fileHashes.Sha256,
+                                current.CanHoldContents);
                         }
                         catch (ValidationException ex)
                         {
@@ -298,8 +341,11 @@ namespace SolidWorksAssetExporter.AddIn
             }
             result.Preview = BuildPreview(plan.Roots, result.AssetVersionMessages, registrySnapshot,
                 settings.SaveRegistryLocally, result.ProjectVersionMessage, result.ValidationErrors,
-                settings.ExportProject);
-            if (bindings != null)
+                result.PlacementDiagnostics, settings.ExportProject);
+            var contactReview = result.ContactDiagnostics.Where(value => value.NeedsReview).Select(value => value.Message).ToArray();
+            if (contactReview.Length != 0)
+                result.Preview += "\r\n父子实体接触复核\r\n" + string.Join("\r\n", contactReview) + "\r\n";
+            if (bindings != null && plan.Relations != null)
             {
                 var relationText = new StringBuilder("\r\n承载关系（当前配置）：\r\n");
                 foreach (var r in plan.Relations.Relations)
@@ -314,10 +360,11 @@ namespace SolidWorksAssetExporter.AddIn
             return result;
         }
 
-        private static void CollectClassificationAndRequiredPropertyIssues(SwCadNode node, bool isRoot,
-            bool exportProject,
+        private static string AssetPropertyKey(SwCadNode node) { return node.SourcePath ?? node.Name; }
+
+        private static void CollectClassificationAndRequiredPropertyIssues(SwCadNode node,
             IList<string> classificationIssues, IList<string> requiredPropertyIssues,
-            ISet<string> inspectedAssetProperties)
+            IDictionary<string, IDictionary<string, string>> inspectedAssetProperties)
         {
             if (node == null) return;
             ModelDescriptor model = null;
@@ -345,19 +392,6 @@ namespace SolidWorksAssetExporter.AddIn
                 }
                 catch (ValidationException ex) { AddIssue(classificationIssues, ex.Message); }
             }
-            if (isRoot && exportProject && properties != null)
-            {
-                try
-                {
-                    PropertyRules.RequirePositiveInteger(properties, PropertyRules.AssemblyVersion, node.Name);
-                }
-                catch (Exception ex)
-                {
-                    if (IsFatal(ex)) throw;
-                    AddIssue(classificationIssues, ex.Message);
-                }
-            }
-
             if (isAsset)
             {
                 var isRobot = PropertyRules.IsRobotClass(properties);
@@ -369,7 +403,6 @@ namespace SolidWorksAssetExporter.AddIn
                     {
                         ModelRules.ValidateExportable(model);
                         PropertyRules.RequireWanxiangAssetClass(properties, node.Name);
-                        PropertyRules.RequirePositiveInteger(properties, PropertyRules.AssetVersion, node.Name);
                     }
                 }
                 catch (Exception ex)
@@ -378,12 +411,14 @@ namespace SolidWorksAssetExporter.AddIn
                     AddIssue(classificationIssues, ex.Message);
                 }
 
-                var propertyKey = node.SourcePath ?? node.Name;
-                if (inspectedAssetProperties.Add(propertyKey))
+                var propertyKey = AssetPropertyKey(node);
+                if (!inspectedAssetProperties.ContainsKey(propertyKey))
                 {
+                    inspectedAssetProperties.Add(propertyKey, null);
                     try
                     {
                         var businessProperties = PropertyRules.Merge(node.Model);
+                        inspectedAssetProperties[propertyKey] = businessProperties;
                         if (!isRobot)
                         {
                             foreach (var name in PropertyRules.MissingOrBlankProperties(
@@ -429,17 +464,8 @@ namespace SolidWorksAssetExporter.AddIn
                 AddIssue(classificationIssues, "模型 [" + node.Name + "] 子组件读取失败：" + ex.Message);
             }
 
-            if (exportProject && children.Count == 0 && model != null)
-            {
-                try { ModelRules.ValidateExportable(model); }
-                catch (Exception ex)
-                {
-                    if (IsFatal(ex)) throw;
-                    AddIssue(classificationIssues, ex.Message);
-                }
-            }
             foreach (var child in children)
-                CollectClassificationAndRequiredPropertyIssues(child, false, exportProject, classificationIssues,
+                CollectClassificationAndRequiredPropertyIssues(child, classificationIssues,
                     requiredPropertyIssues, inspectedAssetProperties);
         }
 
@@ -459,65 +485,50 @@ namespace SolidWorksAssetExporter.AddIn
                 issues.Add(message);
         }
 
-        internal IList<string> OpenAssetsRequiringVersionUpgrade(AnalysisResult analysis)
+        internal static IList<AssetInspection> AssetsRequiringVersionUpgrade(AnalysisResult analysis)
         {
-            var results = new List<string>();
-            if (analysis == null) return results;
-            var inspections = analysis.AssetInspections.Values
-                .Where(value => value != null && value.RequiresVersionUpgrade && value.Node != null &&
+            return analysis.AssetInspections.Values
+                .Where(value => value.RequiresVersionUpgrade && !string.IsNullOrWhiteSpace(value.SourcePath) &&
                     !value.IsEmbeddedAssetRoot &&
-                    !AssetSourcePathPolicy.IsSessionEmbeddedModelPath(value.Node.SourcePath))
-                .GroupBy(value => Path.GetFullPath(value.Node.SourcePath), StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First()).ToList();
-            foreach (var inspection in inspections)
+                    !AssetSourcePathPolicy.IsSessionEmbeddedModelPath(value.SourcePath))
+                .GroupBy(value => value.SourcePath, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderBy(value => Path.GetFileName(value.SourcePath), StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(value => value.SourcePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        internal bool OpenAssetForVersionEditing(string sourcePath)
+        {
+            var path = Path.GetFullPath(sourcePath);
+            var extension = Path.GetExtension(path);
+            var isAssembly = string.Equals(extension, ".SLDASM", StringComparison.OrdinalIgnoreCase);
+            if (AssetSourcePathPolicy.IsSessionEmbeddedModelPath(path) ||
+                (!isAssembly && !string.Equals(extension, ".SLDPRT", StringComparison.OrdinalIgnoreCase)))
+                throw new ValidationException("待升版资产必须是外部 SLDASM/SLDPRT 文件：" + path);
+            if (!File.Exists(path))
+                throw new ValidationException("资产源文件不存在：" + path);
+
+            var document = _app.GetOpenDocumentByName(path) as ModelDoc2;
+            if (document == null)
             {
-                var path = Path.GetFullPath(inspection.Node.SourcePath);
-                var suggested = inspection.SuggestedVersion > inspection.Version
-                    ? inspection.SuggestedVersion : inspection.Version + 1;
-                try
-                {
-                    if (!File.Exists(path))
-                    {
-                        results.Add("打开失败：" + path + "（源文件不存在）");
-                        continue;
-                    }
-                    var document = _app.GetOpenDocumentByName(path) as ModelDoc2;
-                    if (document == null)
-                    {
-                        int errors = 0, warnings = 0;
-                        var documentType = inspection.Node.SourceDocumentKind == DocumentKind.Assembly
-                            ? (int)swDocumentTypes_e.swDocASSEMBLY : (int)swDocumentTypes_e.swDocPART;
-                        document = _app.OpenDoc6(path, documentType,
-                            (int)swOpenDocOptions_e.swOpenDocOptions_Silent, string.Empty,
-                            ref errors, ref warnings) as ModelDoc2;
-                        if (document == null || errors != 0)
-                        {
-                            results.Add(string.Format(CultureInfo.InvariantCulture,
-                                "打开失败：{0}（errors={1}, warnings={2}）", path, errors, warnings));
-                            continue;
-                        }
-                    }
-                    int activationErrors = 0;
-                    var active = _app.ActivateDoc3(document.GetTitle(), false,
-                        (int)swRebuildOnActivation_e.swDontRebuildActiveDoc, ref activationErrors) as ModelDoc2;
-                    if (active == null)
-                    {
-                        results.Add("已打开但无法激活：" + path);
-                        continue;
-                    }
-                    var readOnly = false;
-                    try { readOnly = active.IsOpenedReadOnly(); }
-                    catch { }
-                    results.Add((readOnly ? "已打开（只读，需解除只读后修改）" : "已打开") + "：" + path +
-                        "\r\n    asset_version：v" + inspection.Version.ToString(CultureInfo.InvariantCulture) +
-                        " → 建议 v" + suggested.ToString(CultureInfo.InvariantCulture));
-                }
-                catch (Exception ex)
-                {
-                    results.Add("打开失败：" + path + "（" + ex.Message + "）");
-                }
+                int errors = 0, warnings = 0;
+                var documentType = isAssembly
+                    ? (int)swDocumentTypes_e.swDocASSEMBLY : (int)swDocumentTypes_e.swDocPART;
+                document = _app.OpenDoc6(path, documentType,
+                    (int)swOpenDocOptions_e.swOpenDocOptions_Silent, string.Empty,
+                    ref errors, ref warnings) as ModelDoc2;
+                if (document == null || errors != 0)
+                    throw new ValidationException(string.Format(CultureInfo.InvariantCulture,
+                        "无法打开资产：{0}（errors={1}, warnings={2}）", path, errors, warnings));
             }
-            return results;
+
+            int activationErrors = 0;
+            var active = _app.ActivateDoc3(document.GetTitle(), false,
+                (int)swRebuildOnActivation_e.swDontRebuildActiveDoc, ref activationErrors) as ModelDoc2;
+            if (active == null || !string.Equals(active.GetPathName(), path, StringComparison.OrdinalIgnoreCase))
+                throw new ValidationException("已打开但无法激活所选资产：" + path);
+            return active.IsOpenedReadOnly();
         }
 
         private AnalysisResult InspectProjectFingerprints(AnalysisResult result,
@@ -572,8 +583,24 @@ namespace SolidWorksAssetExporter.AddIn
             var destination = ProjectVersionDirectory(settings, plan);
             try
             {
-                result.ProjectState = ProjectReportValidator.Inspect(destination, plan.AssemblyUuid,
+                result.ProjectState = ProjectReportValidator.InspectVersion(destination, plan.AssemblyUuid,
                     plan.AssemblyVersion, result.ProjectFingerprint);
+                if (result.ProjectState == ExistingProjectState.ContentChanged)
+                {
+                    var latest = plan.AssemblyVersion;
+                    foreach (var directory in Directory.EnumerateDirectories(Path.GetDirectoryName(destination), "v*"))
+                    {
+                        int version;
+                        if (int.TryParse(Path.GetFileName(directory).Substring(1), NumberStyles.None, CultureInfo.InvariantCulture, out version))
+                            latest = Math.Max(latest, version);
+                    }
+                    if (latest == int.MaxValue) throw new ValidationException("assembly_version 已达到上限。");
+                    result.SuggestedProjectVersion = latest + 1;
+                    result.CanExport = false;
+                    result.ProjectVersionMessage = "[装配内容已变化，插件建议提升 assembly_version 至 v" +
+                        result.SuggestedProjectVersion + "]";
+                    return;
+                }
                 result.ProjectVersionMessage = result.ProjectState == ExistingProjectState.Reusable
                     ? "[assembly_package 指纹一致：assembly_version v" +
                         plan.AssemblyVersion.ToString(CultureInfo.InvariantCulture) + " 可直接复用]"
@@ -634,7 +661,7 @@ namespace SolidWorksAssetExporter.AddIn
                     throw new ValidationException("预览后承载关系已修改，请保存并重新预览。");
                 var fresh = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(SwAssemblyRoot.FromActiveDocument(_app, _mutationTracker)),
                     previewed.Plan.MeshFormat, previewed.Plan.ExportProject);
-                fresh.Relations = bindings.Export(fresh);
+                fresh.Relations = ExportRelations(bindings, fresh);
                 if (CalculatePlanFingerprint(fresh) != previewed.PlanFingerprint)
                     throw new ValidationException("预览后的关系、位姿或导出节点已变化，请保存并重新预览。");
             }
@@ -670,10 +697,15 @@ namespace SolidWorksAssetExporter.AddIn
 
             Checkpoint(progress, cancellationRequested, "重新读取 Wanxiang 注册表并校验 Asset 版本");
             var registry = _registryProvider.Fetch(settings).Registry;
+            var currentNames = registry.Assets.Concat(AssetRegistryStore.LocalPackageNames(settings.AssetLibraryRoot))
+                .Where(asset => !string.IsNullOrWhiteSpace(asset.Name)).ToLookup(asset => Canonical.Normalize(asset.Name));
             using (var fileHashes = new FileFingerprintCache())
             {
                 foreach (var inspection in previewed.AssetInspections.Values)
                 {
+                    var name = AssetName(inspection.Properties);
+                    if (currentNames[Canonical.Normalize(name)].Any(asset => !string.Equals(asset.Uuid, inspection.Uuid, StringComparison.OrdinalIgnoreCase)))
+                        throw new ValidationException("资产名称已被其他 UUID 使用，请重新分类预览：" + name);
                     var decision = AssetVersionPolicy.Evaluate(inspection.Uuid, inspection.Version,
                         inspection.Fingerprint, registry.Assets);
                     if (!decision.CanExport)
@@ -684,7 +716,7 @@ namespace SolidWorksAssetExporter.AddIn
                     {
                         inspection.State = AssetManifestValidator.Inspect(
                             AssetVersionDirectory(settings, inspection.Uuid, inspection.Version), inspection.Uuid,
-                            inspection.Version, inspection.Fingerprint, fileHashes.Sha256);
+                            inspection.Version, inspection.Fingerprint, fileHashes.Sha256, inspection.CanHoldContents);
                         inspection.RequiresLocalPackageRebuild = false;
                         inspection.LocalPackageError = null;
                     }
@@ -814,7 +846,148 @@ namespace SolidWorksAssetExporter.AddIn
                 throw new OperationCanceledException("用户已取消导出。");
         }
 
-        private AssetInspection InspectAsset(SwCadNode source, ExportNode node, FileFingerprintCache fileHashes)
+        private static AssemblyRelations ExportRelations(SwInstanceBindings bindings, AssemblyExportPlan plan)
+        {
+            var relations = bindings.Export(plan);
+            relations.IncludeAssetPlacements(Flatten(plan.Roots).Where(node => node.Kind == ExportNodeKind.Asset));
+            return relations;
+        }
+
+        private static string PlacementReviewOccurrence(ExportNode node)
+        {
+            var source = (SwCadNode)node.Source;
+            try
+            {
+                var context = source.Component == null ? source.InstanceId : SwInstanceBindings.Context(source.Component);
+                return string.IsNullOrEmpty(context) ? null : context + "\n" + source.SourcePath;
+            }
+            catch (COMException) { return null; }
+            catch (ValidationException) { return null; }
+        }
+
+        internal static IDictionary<string, string> ReadPlacementReviews(string assemblyUuid, string directory = null)
+        {
+            var empty = new Dictionary<string, string>(StringComparer.Ordinal);
+            Guid assembly;
+            if (!Guid.TryParseExact(assemblyUuid, "D", out assembly)) return empty;
+            var folder = directory ?? Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                "SolidWorksAssetExporter", "PlacementReviews");
+            if (string.IsNullOrWhiteSpace(folder) || !Path.IsPathRooted(folder)) return empty;
+            try
+            {
+                using (var stream = File.OpenRead(Path.Combine(folder, assembly.ToString("D") + ".json")))
+                {
+                    if (stream.Length == 0 || stream.Length > 1024 * 1024) return empty;
+                    string content;
+                    using (var text = new StreamReader(stream, new UTF8Encoding(false, true), true)) content = text.ReadToEnd();
+                    // The JSON reader exposes duplicate object properties, but can stop at the first root.
+                    // Validate the complete input before using it to inspect the exact property set.
+                    new JavaScriptSerializer { RecursionLimit = 6 }.DeserializeObject(content);
+                    var quotas = new XmlDictionaryReaderQuotas { MaxDepth = 6, MaxStringContentLength = 4096 };
+                    using (var reader = JsonReaderWriterFactory.CreateJsonReader(Encoding.UTF8.GetBytes(content), quotas))
+                    {
+                        var root = XDocument.Load(reader).Root;
+                        if (root == null || (string)root.Attribute("type") != "object" || root.Elements().Count() != 2)
+                            return empty;
+                        var schema = root.Elements("schema_version").SingleOrDefault();
+                        var reviews = root.Elements("reviews").SingleOrDefault();
+                        if (schema == null || (string)schema.Attribute("type") != "string" || schema.Value != "1.0" ||
+                            reviews == null || (string)reviews.Attribute("type") != "object") return empty;
+                        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+                        foreach (var entry in reviews.Elements())
+                        {
+                            // The JSON XML reader maps property names beginning with a digit to item attributes.
+                            var key = (string)entry.Attribute("item") ?? entry.Name.LocalName;
+                            var reason = entry.Value.Trim();
+                            if ((string)entry.Attribute("type") != "string" || key.Length != 64 ||
+                                key.Any(c => !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f')) ||
+                                reason.Length == 0 || reason.Any(char.IsControl) || result.ContainsKey(key)) return empty;
+                            result.Add(key, reason);
+                        }
+                        return result;
+                    }
+                }
+            }
+            catch (IOException) { return empty; }
+            catch (UnauthorizedAccessException) { return empty; }
+            catch (System.Security.SecurityException) { return empty; }
+            catch (XmlException) { return empty; }
+            catch (InvalidOperationException) { return empty; }
+            catch (ArgumentException) { return empty; }
+        }
+
+        private static string AssetName(IDictionary<string, string> properties)
+        {
+            string name;
+            return properties.TryGetValue(PropertyRules.PartName, out name) ? name ?? string.Empty : string.Empty;
+        }
+
+        internal static IDictionary<string, string> ResolveAssetExportNames(IEnumerable<ExportNode> assets,
+            IEnumerable<AssetRegistration> knownAssets)
+        {
+            // The export tree has classification properties only for unbound assets.
+            return AssetRegistryStore.AllocateNames(assets.GroupBy(node => node.GeometryUuid, StringComparer.Ordinal)
+                .Select(group => new KeyValuePair<string, string>(group.Key, AssetName(PropertyRules.Merge(group.First().Source.Model)))), knownAssets);
+        }
+
+        internal static Dictionary<string, string> PublishedAssetProperties(IDictionary<string, string> source, string uuid,
+            string name, IEnumerable<string> boundChildren)
+        {
+            var properties = new Dictionary<string, string>(source, StringComparer.OrdinalIgnoreCase);
+            if (name != null) properties[PropertyRules.PartName] = name;
+            properties.Remove(PropertyRules.LegacyCanContain);
+            if (properties.ContainsKey(PropertyRules.CanContain))
+            {
+                var canContain = PropertyRules.ReadCanContain(properties);
+                properties.Remove(PropertyRules.CanContain);
+                properties.Add(PropertyRules.CanContain, canContain ? "1" : "0");
+            }
+            var slotType = PropertyRules.ReadAssetSlotType(properties);
+            properties.Remove(PropertyRules.SlotType);
+            if (slotType.Length != 0) properties.Add(PropertyRules.SlotType, slotType);
+            string engagement;
+            if (properties.TryGetValue(PropertyRules.AssetEngagement, out engagement))
+            {
+                properties.Remove(PropertyRules.AssetEngagement);
+                if (!string.IsNullOrWhiteSpace(engagement)) properties.Add(PropertyRules.AssetEngagement, engagement.Trim());
+            }
+            properties[PropertyRules.ConnectionInterface] = uuid;
+            string legacy;
+            if (properties.TryGetValue(PropertyRules.LegacyAcceptsInterface, out legacy) &&
+                (legacy ?? "").Split(';', '；').Any(PropertyRules.IsContentsInterface))
+            {
+                var mechanical = PropertyRules.MechanicalInterfaceNames(legacy);
+                if (mechanical.Count == 0) properties.Remove(PropertyRules.LegacyAcceptsInterface);
+                else properties[PropertyRules.LegacyAcceptsInterface] = string.Join(";", mechanical);
+            }
+            string declared;
+            properties.TryGetValue(PropertyRules.AcceptsInterfaces, out declared);
+            var accepted = new HashSet<string>(boundChildren, StringComparer.Ordinal);
+            foreach (var value in PropertyRules.MechanicalInterfaceNames(declared))
+            {
+                Guid child;
+                if (Guid.TryParseExact(value, "D", out child)) accepted.Add(child.ToString("D"));
+            }
+            properties[PropertyRules.AcceptsInterfaces] = string.Join(";", accepted.OrderBy(child => child, StringComparer.Ordinal));
+            return properties;
+        }
+
+        internal static string AssetContentFingerprint(string modelFingerprint, IEnumerable<string> drawingEntries,
+            IDictionary<string, string> properties, bool canHoldContents)
+        {
+            var material = Canonical.Join("asset-placement-uuid-v2", modelFingerprint, string.Join("\n", drawingEntries),
+                FileHash.Sha256Text(AssetName(properties)), properties[PropertyRules.ConnectionInterface],
+                properties[PropertyRules.AcceptsInterfaces], canHoldContents ? "1" : "0");
+            var slotType = PropertyRules.ReadAssetSlotType(properties);
+            string assetEngagement;
+            properties.TryGetValue(PropertyRules.AssetEngagement, out assetEngagement);
+            if (!string.IsNullOrWhiteSpace(slotType) || !string.IsNullOrWhiteSpace(assetEngagement))
+                material += Canonical.Join(PropertyRules.SlotType, slotType, PropertyRules.AssetEngagement, assetEngagement);
+            return FileHash.Sha256Text(material);
+        }
+
+        private AssetInspection InspectAsset(SwCadNode source, ExportNode node, FileFingerprintCache fileHashes,
+            string name, IEnumerable<string> boundChildren)
         {
             var modelFiles = _packager.AssetModelFiles(source);
             var drawings = _drawings.FindDirectDrawingFiles(modelFiles);
@@ -824,15 +997,16 @@ namespace SolidWorksAssetExporter.AddIn
             var modelFingerprint = FileHash.Sha256Text(Canonical.Join(IdentityService.ModelSeed(source.Model), string.Join("\n", modelEntries)));
             var drawingEntries = drawings.Select(path => Canonical.Join(Path.GetFileName(path), fileHashes.Sha256(path)))
                 .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
-            var fingerprint = FileHash.Sha256Text(Canonical.Join(modelFingerprint, string.Join("\n", drawingEntries)));
             var version = int.Parse(node.AssetId.Substring(node.AssetId.LastIndexOf(':') + 1), CultureInfo.InvariantCulture);
-            var properties = new Dictionary<string, string>(PropertyRules.Merge(source.Model),
-                StringComparer.OrdinalIgnoreCase);
+            var properties = PublishedAssetProperties(PropertyRules.Merge(source.Model), node.GeometryUuid, name, boundChildren);
+            var canHoldContents = PropertyRules.ReadCanContain(properties);
+            var fingerprint = AssetContentFingerprint(modelFingerprint, drawingEntries, properties, canHoldContents);
             return new AssetInspection
             {
-                Node = source, Uuid = node.GeometryUuid, Fingerprint = fingerprint, Version = version,
+                Node = source, SourcePath = Path.GetFullPath(source.SourcePath),
+                Uuid = node.GeometryUuid, Fingerprint = fingerprint, Version = version,
                 State = ExistingAssetState.Missing, ModelFiles = modelFiles, Drawings = drawings,
-                Properties = properties
+                Properties = properties, CanHoldContents = canHoldContents
             };
         }
 
@@ -847,6 +1021,13 @@ namespace SolidWorksAssetExporter.AddIn
                 using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl, settings.WanxiangApiKey))
                 {
                     var manifest = DownloadRegisteredManifest(client, registered, temporary);
+                    var capabilityMismatch = AssetManifestValidator.DescribeContentsCapabilityMismatch(
+                        manifest, inspection.CanHoldContents);
+                    if (capabilityMismatch != null)
+                    {
+                        inspection.SemanticMismatchReason = capabilityMismatch;
+                        return false;
+                    }
                     var differingProperties = RegisteredPropertyDifferences(manifest.Properties, inspection.Properties);
                     var stl = manifest.Files.FirstOrDefault(file =>
                         string.Equals(file.Path, "geometry/model.stl", StringComparison.OrdinalIgnoreCase));
@@ -885,7 +1066,7 @@ namespace SolidWorksAssetExporter.AddIn
             var path = Path.Combine(destination, name);
             if (!client.DownloadFileIfExists(RegisteredRemotePath(registered, name), path))
                 throw new ValidationException("Wanxiang 已注册 Asset 清单不存在：" + registered.AssetId);
-            var manifest = JsonFile.Read<AssetManifest>(path);
+            var manifest = AssetManifestValidator.ReadManifest(path);
             if (manifest == null || manifest.Files == null ||
                 !string.Equals(manifest.Uuid, registered.Uuid, StringComparison.OrdinalIgnoreCase) ||
                 manifest.Version != registered.Version ||
@@ -895,7 +1076,7 @@ namespace SolidWorksAssetExporter.AddIn
             return manifest;
         }
 
-        private static IList<string> RegisteredPropertyDifferences(IDictionary<string, string> registered,
+        internal static IList<string> RegisteredPropertyDifferences(IDictionary<string, string> registered,
             IDictionary<string, string> current)
         {
             var differences = new List<string>();
@@ -907,6 +1088,10 @@ namespace SolidWorksAssetExporter.AddIn
             foreach (var key in registered.Keys.Union(current.Keys, StringComparer.OrdinalIgnoreCase)
                 .OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
             {
+                if (key.Equals(PropertyRules.AssetVersion, StringComparison.OrdinalIgnoreCase) ||
+                    key.Equals(PropertyRules.AssemblyVersion, StringComparison.OrdinalIgnoreCase) ||
+                    key.Equals(PropertyRules.LegacyCanContain, StringComparison.OrdinalIgnoreCase))
+                    continue;
                 string oldValue;
                 string value;
                 var oldPresent = registered.TryGetValue(key, out oldValue);
@@ -957,7 +1142,8 @@ namespace SolidWorksAssetExporter.AddIn
                         throw new ValidationException("Wanxiang 已注册 Asset 包文件不存在：" + file.Path);
                 }
                 if (AssetManifestValidator.Inspect(transaction.StagingDirectory, inspection.Uuid,
-                    inspection.Version, inspection.Fingerprint) != ExistingAssetState.Reusable)
+                    inspection.Version, inspection.Fingerprint, FileHash.Sha256,
+                    inspection.CanHoldContents) != ExistingAssetState.Reusable)
                     throw new ValidationException("Wanxiang 已注册 Asset 包校验未通过：" + registered.AssetId);
                 if (inspection.RequiresLocalPackageRebuild)
                 {
@@ -985,7 +1171,7 @@ namespace SolidWorksAssetExporter.AddIn
                 if (inspection.State == ExistingAssetState.Reusable)
                 {
                     var reusedUuid = IdentityService.AssetUuid(inspection.Node.Model).ToString("D");
-                    RecordAssetRegistration(completion, reusedUuid, inspection.Version, inspection.Fingerprint);
+                    RecordAssetRegistration(completion, reusedUuid, inspection);
                     completion.AssetDirectories.Add(AssetVersionDirectory(settings, reusedUuid, inspection.Version));
                     completion.ReusedAssets++; reportReused.Add(assetId); continue;
                 }
@@ -994,7 +1180,7 @@ namespace SolidWorksAssetExporter.AddIn
                 if (inspection.ReuseRemotePackage)
                 {
                     RestoreRegisteredAssetPackage(settings, inspection, completion);
-                    RecordAssetRegistration(completion, uuid, inspection.Version, inspection.Fingerprint);
+                    RecordAssetRegistration(completion, uuid, inspection);
                     completion.AssetDirectories.Add(destination);
                     completion.ReusedAssets++; reportReused.Add(assetId); continue;
                 }
@@ -1020,6 +1206,7 @@ namespace SolidWorksAssetExporter.AddIn
                     {
                         SchemaVersion = "1.0", Uuid = uuid, Version = inspection.Version,
                         ContentFingerprint = inspection.Fingerprint,
+                        CanHoldContents = inspection.CanHoldContents,
                         Properties = new Dictionary<string, string>(inspection.Properties,
                             StringComparer.OrdinalIgnoreCase),
                         Files = AssetManifestValidator.DescribeFiles(transaction.StagingDirectory, relativeFiles)
@@ -1035,7 +1222,7 @@ namespace SolidWorksAssetExporter.AddIn
                     }
                     transaction.Commit();
                 }
-                RecordAssetRegistration(completion, uuid, inspection.Version, inspection.Fingerprint);
+                RecordAssetRegistration(completion, uuid, inspection);
                 completion.AssetDirectories.Add(destination);
                 completion.CreatedAssets++; reportCreated.Add(assetId);
             }
@@ -1091,7 +1278,7 @@ namespace SolidWorksAssetExporter.AddIn
                 var report = new ExportReport
                 {
                     SchemaVersion = "1.0", AssemblyUuid = plan.AssemblyUuid, AssemblyVersion = plan.AssemblyVersion,
-                    ContentFingerprint = analysis.ProjectFingerprint, RelationsSchemaVersion = AssemblyRelations.CurrentSchemaVersion,
+                    ContentFingerprint = analysis.ProjectFingerprint, RelationsSchemaVersion = plan.Relations.SchemaVersion,
                     Files = AssetManifestValidator.DescribeFiles(transaction.StagingDirectory, relativeFiles)
                 };
                 foreach (var asset in analysis.AssetInspections)
@@ -1142,7 +1329,7 @@ namespace SolidWorksAssetExporter.AddIn
         private static string BuildPreview(IEnumerable<ExportNode> roots,
             IDictionary<string, string> assetVersionMessages, WanxiangRegistrySnapshot registrySnapshot,
             bool savedLocally, string projectVersionMessage, IEnumerable<string> validationErrors,
-            bool exportProject)
+            IEnumerable<ExportPlacementDiagnostic> placementDiagnostics, bool exportProject)
         {
             var builder = new StringBuilder();
             builder.Append("Wanxiang 注册表: ").Append(registrySnapshot.RemotePath)
@@ -1162,6 +1349,23 @@ namespace SolidWorksAssetExporter.AddIn
                     .Append(errors.Count.ToString(CultureInfo.InvariantCulture)).AppendLine(" 项）：");
                 for (var index = 0; index < errors.Count; index++)
                     builder.Append(index + 1).Append(". ").AppendLine(errors[index]);
+                builder.AppendLine();
+            }
+            var warnings = placementDiagnostics.Where(item => !item.IsBlocking && item.ReviewReason == null).ToList();
+            if (warnings.Count != 0)
+            {
+                builder.Append("装配位置和槽位核对（")
+                    .Append(warnings.Count.ToString(CultureInfo.InvariantCulture)).AppendLine(" 项提醒）：");
+                for (var index = 0; index < warnings.Count; index++)
+                    builder.Append(index + 1).Append(". ").AppendLine(warnings[index].Message);
+                builder.AppendLine();
+            }
+            var reviews = placementDiagnostics.Where(item => item.ReviewReason != null).ToList();
+            if (reviews.Count != 0)
+            {
+                builder.Append("已复核的槽位容量（本机记录，")
+                    .Append(reviews.Count.ToString(CultureInfo.InvariantCulture)).AppendLine(" 项）：");
+                foreach (var review in reviews) builder.AppendLine(review.Message);
                 builder.AppendLine();
             }
             var values = roots.ToList();
@@ -1243,17 +1447,19 @@ namespace SolidWorksAssetExporter.AddIn
         }
 
         private static void RecordAssetRegistration(ExportCompletion completion,
-            string uuid, int version, string fingerprint)
+            string uuid, AssetInspection inspection)
         {
             var parsedUuid = Guid.Parse(uuid);
             var normalizedUuid = parsedUuid.ToString("D");
+            var version = inspection.Version;
             completion.AssetRegistrations.Add(new AssetRegistration
             {
                 AssetId = IdentityService.AssetId(parsedUuid, version),
                 Uuid = normalizedUuid,
                 Version = version,
+                Name = AssetName(inspection.Properties),
                 RelativeDirectory = normalizedUuid + "/v" + version.ToString(CultureInfo.InvariantCulture),
-                ContentFingerprint = fingerprint,
+                ContentFingerprint = inspection.Fingerprint,
                 RegisteredUtc = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture)
             });
         }

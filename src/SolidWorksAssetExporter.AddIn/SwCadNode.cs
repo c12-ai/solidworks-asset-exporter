@@ -45,7 +45,7 @@ namespace SolidWorksAssetExporter.AddIn
         {
         }
 
-        private SwCadNode(SldWorks application, Component2 component, string instancePath,
+        internal SwCadNode(SldWorks application, Component2 component, string instancePath,
             bool isTraversalRoot, string traversalRootName, IDictionary<string, ModelDescriptor> modelCache,
             SwPluginMutationTracker mutationTracker)
         {
@@ -70,7 +70,7 @@ namespace SolidWorksAssetExporter.AddIn
                         ? null : document.ConfigurationManager.ActiveConfiguration;
                     return configuration == null ? string.Empty : configuration.Name;
                 }
-                try { return Convert.ToString(((dynamic)_component).ReferencedConfiguration) ?? string.Empty; }
+                try { return _component.ReferencedConfiguration ?? string.Empty; }
                 catch { return string.Empty; }
             }
         }
@@ -122,9 +122,13 @@ namespace SolidWorksAssetExporter.AddIn
 
         private static bool IsEmbeddedSessionComponent(Component2 component, string path)
         {
-            try { if (component != null && component.IsVirtual) return true; }
-            catch { }
-            return AssetSourcePathPolicy.IsSessionEmbeddedModelPath(path);
+            return IsVirtualComponent(component) || AssetSourcePathPolicy.IsSessionEmbeddedModelPath(path);
+        }
+
+        private static bool IsVirtualComponent(Component2 component)
+        {
+            try { return component != null && component.IsVirtual; }
+            catch { return false; }
         }
 
         public string InstanceId { get; private set; }
@@ -135,6 +139,8 @@ namespace SolidWorksAssetExporter.AddIn
         public bool IsEnvelope { get { return !_isTraversalRoot && _component != null && _component.IsEnvelope(); } }
         public bool IsFixed { get { return !_isTraversalRoot && _component != null && _component.IsFixed(); } }
         public ModelDescriptor Model { get { return _model ?? (_model = ReadModel()); } }
+        internal bool HasUserChanges(ModelDoc2 document)
+        { return _mutationTracker.IsDirty(document, false, SourcePath); }
         public ModelDescriptor ClassificationModel
         {
             get { return _classificationModel ?? (_classificationModel = ReadClassificationModel()); }
@@ -164,8 +170,10 @@ namespace SolidWorksAssetExporter.AddIn
         {
             get
             {
-                if (_isTraversalRoot || _component == null || _component.Transform2 == null) return Matrix4.Identity;
-                var values = (double[])_component.Transform2.ArrayData;
+                if (_isTraversalRoot || _component == null) return Matrix4.Identity;
+                var transform = _component.Transform2;
+                if (transform == null) return Matrix4.Identity;
+                var values = (double[])transform.ArrayData;
                 if (values == null || values.Length < 13) throw new ValidationException("组件变换矩阵格式无效: " + Name);
                 var scale = values[12];
                 if (Math.Abs(scale - 1d) > 1e-9) throw new ValidationException("组件包含非单位缩放，无法用刚体位姿表达: " + Name);
@@ -228,6 +236,7 @@ namespace SolidWorksAssetExporter.AddIn
                     DocumentKind = ToDocumentKind(document.GetType()),
                     IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
                     IsDirty = _mutationTracker.IsDirty(document, lease.OpenedHere, path),
+                    IsVirtualComponent = !_isTraversalRoot && IsEmbeddedSessionComponent(_component, requestedPath),
                     FileProperties = ReadNodeProperties(document, string.Empty),
                     // Business and classification metadata are intentionally file-level only.
                     // Never read the SOLIDWORKS "Configuration Specific" property tab.
@@ -243,7 +252,7 @@ namespace SolidWorksAssetExporter.AddIn
             var path = SourcePath;
             var requestedConfiguration = ReferencedConfiguration;
             var displayState = ReferencedDisplayState();
-            var cacheKey = "classification|" + Canonical.Join(path, requestedConfiguration);
+            var cacheKey = "classification|" + Canonical.Join(path, requestedConfiguration, displayState);
             ModelDescriptor cached;
             if (_modelCache.TryGetValue(cacheKey, out cached)) return cached;
 
@@ -259,18 +268,22 @@ namespace SolidWorksAssetExporter.AddIn
                 var configuration = string.IsNullOrWhiteSpace(requestedConfiguration)
                     ? (activeConfiguration == null ? string.Empty : activeConfiguration.Name)
                     : requestedConfiguration;
+                var properties = ReadClassificationProperties(document, string.Empty, true);
+                var creationTime = _isTraversalRoot || (PropertyRules.ReadIsAsset(properties) && !PropertyRules.IsRobotClass(properties))
+                    ? NormalizeCreationTime(Convert.ToString(document.get_SummaryInfo((int)swSummInfoField_e.swSumInfoCreateDate)))
+                    : string.Empty;
                 var descriptor = new ModelDescriptor
                 {
                     FullPath = path,
                     FileName = Path.GetFileName(path),
-                    InternalCreationTime = NormalizeCreationTime(Convert.ToString(
-                        document.get_SummaryInfo((int)swSummInfoField_e.swSumInfoCreateDate))),
+                    InternalCreationTime = creationTime,
                     Configuration = configuration ?? string.Empty,
                     DisplayState = displayState,
                     DocumentKind = SourceDocumentKind,
                     IsSaved = !string.IsNullOrWhiteSpace(path) && File.Exists(path),
                     IsDirty = _mutationTracker.IsDirty(document, lease.OpenedHere, path),
-                    FileProperties = ReadClassificationProperties(document, string.Empty, true),
+                    IsVirtualComponent = !_isTraversalRoot && IsEmbeddedSessionComponent(_component, path),
+                    FileProperties = properties,
                     ConfigurationProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 };
                 _modelCache[cacheKey] = descriptor;
@@ -347,6 +360,7 @@ namespace SolidWorksAssetExporter.AddIn
             if (names == null) return result;
             foreach (var name in names)
             {
+                if (name.Equals(PropertyRules.LegacyCanContain, StringComparison.OrdinalIgnoreCase)) continue;
                 string raw, resolved; bool wasResolved, linked;
                 manager.Get6(name, useCached, out raw, out resolved, out wasResolved, out linked);
                 result.Add(name, wasResolved && !string.IsNullOrEmpty(resolved) ? resolved : (raw ?? string.Empty));

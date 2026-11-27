@@ -37,7 +37,7 @@ namespace SolidWorksAssetExporter.Core
                 {
                     ModelRules.ValidateExportable(classificationModel);
                     PropertyRules.RequireWanxiangAssetClass(properties, node.Name);
-                    result.AssetVersion = PropertyRules.RequirePositiveInteger(properties, PropertyRules.AssetVersion, node.Name);
+                    result.AssetVersion = PropertyRules.ReadManagedVersion(properties, PropertyRules.AssetVersion);
                 }
                 return result;
             }
@@ -66,10 +66,10 @@ namespace SolidWorksAssetExporter.Core
         {
             if (root == null || root.Source == null) throw new ArgumentNullException("root");
             var version = exportProject
-                ? PropertyRules.RequirePositiveInteger(root.Properties, PropertyRules.AssemblyVersion, root.Source.Name)
+                ? PropertyRules.ReadManagedVersion(root.Properties, PropertyRules.AssemblyVersion)
                 : 0;
             var assemblyModel = PlanningModel(root.Source);
-            ModelRules.ValidateExportable(assemblyModel);
+            ModelRules.ValidateClassifiable(assemblyModel);
             var assemblyUuid = IdentityService.AssemblyUuid(assemblyModel);
             var plan = new AssemblyExportPlan
             {
@@ -136,8 +136,7 @@ namespace SolidWorksAssetExporter.Core
                 if (exportProject)
                 {
                     var projectModel = PlanningModel(scan.Source);
-                    ModelRules.ValidateExportable(projectModel);
-                    var projectUuid = IdentityService.ProjectUnitUuid(assemblyUuid, projectModel);
+                    var projectUuid = IdentityService.ProjectUnitUuid(assemblyUuid, projectModel, scan.Source.InstancePath);
                     node.GeometryUuid = projectUuid.ToString("D");
                     node.MeshFile = string.Format(CultureInfo.InvariantCulture, "meshes/{0}/model.{1}",
                         node.GeometryUuid, meshFormat == ProjectMeshFormat.Step ? "step" : "stl");
@@ -172,17 +171,22 @@ namespace SolidWorksAssetExporter.Core
         {
             if (node == null) throw new ValidationException("导出树包含空节点。");
             if (!ids.Add(node.Id)) throw new ValidationException("导出树包含重复节点 ID: [" + node.Id + "]。");
-            var workstation = AssemblyXmlWriter.IsWorkstation(node);
-            if (workstation) PropertyRules.RequireWorkstationName(node.Properties, node.Name);
-            if (workstation && node.Kind == ExportNodeKind.Group)
-                throw new ValidationException("Workstation 节点不能使用 Group 分类。");
-            if (node.Kind == ExportNodeKind.Workstation && !workstation)
-                throw new ValidationException("Workstation 节点必须声明 is_workstation。");
             if (node.Kind == ExportNodeKind.Group || node.Kind == ExportNodeKind.Workstation)
             {
+                var classificationSource = node.Source as ICadClassificationSource;
+                var model = classificationSource != null ? classificationSource.ClassificationModel :
+                    node.Source == null ? null : node.Source.Model;
+                var workstation = model != null && PropertyRules.ReadIsWorkstation(node.Properties, model.DocumentKind);
+                if (node.Kind == ExportNodeKind.Workstation)
+                {
+                    if (!workstation) throw new ValidationException("Workstation 节点必须是标记为工位的非 Asset 装配体。");
+                    PropertyRules.RequireWorkstationName(node.Properties, node.Name);
+                }
+                else if (workstation)
+                    throw new ValidationException("Workstation 节点不能使用 Group 分类。");
                 if (!string.IsNullOrEmpty(node.AssetId) ||
                     !string.IsNullOrEmpty(node.MeshFile) || !string.IsNullOrEmpty(node.GeometryUuid))
-                    throw new ValidationException("Group 节点不能包含 mesh 或几何标识。");
+                    throw new ValidationException(node.Kind + " 节点不能包含 mesh 或几何标识。");
                 if (node.Kind == ExportNodeKind.Group && node.Children.Count == 0)
                     throw new ValidationException("Group 节点必须包含子节点。");
             }

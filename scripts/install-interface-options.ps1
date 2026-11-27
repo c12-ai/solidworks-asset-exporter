@@ -55,13 +55,42 @@ foreach ($file in @('part.prtprp', 'asem.asmprp')) {
     $xml = New-Object Xml.XmlDocument
     $xml.PreserveWhitespace = $true
     $xml.LoadXml($raw)
-    foreach ($field in @('connection_interface', 'accepts_interfaces')) {
+    $fields = @('connection_interface', 'accepts_interfaces', 'slots_num')
+    if ($file -eq 'asem.asmprp') { $fields += 'assembly_version' }
+    foreach ($field in $fields) {
         $nodes = $xml.SelectNodes("//Control[@PropName='$field']")
-        if ($nodes.Count -ne 1 -or $nodes[0].GetAttribute('ApplyTo') -ne 'Global' -or $nodes[0].GetAttribute('Type') -ne 'TextBox') {
-            throw "Expected one file-level textbox for $field in $path; original files preserved."
+        if ($nodes.Count -eq 0) { continue }
+        if ($nodes.Count -ne 1 -or $nodes[0].GetAttribute('ApplyTo') -ne 'Global') {
+            throw "Expected one file-level control for $field in $path; original files preserved."
         }
         $nodes[0].SetAttribute('ReadOnly', 'True')
-        $nodes[0].SetAttribute('Label', $field + '（插件维护）')
+        if (-not $nodes[0].GetAttribute('Label').EndsWith('（插件维护）')) {
+            $nodes[0].SetAttribute('Label', $field + '（插件维护）')
+        }
+    }
+    $assetVersion = $xml.SelectNodes("//Control[@PropName='asset_version']")
+    if ($assetVersion.Count -gt 1 -or ($assetVersion.Count -eq 1 -and $assetVersion[0].GetAttribute('ApplyTo') -ne 'Global')) {
+        throw "Expected one file-level asset_version control in $path; original files preserved."
+    }
+    if ($assetVersion.Count -eq 1) {
+        $robot = $xml.SelectSingleNode("//Control[@PropName='class']/Data/Item[@PropValue='robot']")
+        if ($null -eq $robot) {
+            $assetVersion[0].SetAttribute('ReadOnly', 'True')
+            $assetVersion[0].SetAttribute('Label', 'asset_version（插件维护）')
+        }
+        else {
+            foreach ($link in @($xml.SelectNodes("//ChildControl[@PropName='asset_version']"))) {
+                if ($link.ParentNode -ne $robot) { [void]$link.ParentNode.RemoveChild($link) }
+            }
+            $link = $robot.SelectSingleNode("ChildControl[@PropName='asset_version']")
+            if ($null -eq $link) {
+                $link = $xml.CreateElement('ChildControl')
+                $link.SetAttribute('PropName', 'asset_version')
+                [void]$robot.AppendChild($link)
+            }
+            $link.SetAttribute('Visibility', 'IsChecked=true')
+            $assetVersion[0].SetAttribute('Label', 'Robot 外部引用版本（asset_version）')
+        }
     }
     $updated = $xml.OuterXml
     if ($updated -ne $raw) { $plans.Add([PSCustomObject]@{ Path = $path; Hash = (File-Hash $path); Content = $updated }) }
@@ -108,7 +137,7 @@ try {
         finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
     }
     Write-Output ('BACKUP=' + $BackupDirectory)
-    Write-Output 'Close and reopen the interface dialog and Custom Properties pane to refresh. No model properties were changed.'
+    Write-Output 'Refresh the SOLIDWORKS Custom Properties pane to load the updated templates.'
 }
 catch { Write-Warning ('Update interrupted; files already updated retain their changes. Backups: ' + $BackupDirectory); throw }
 finally { $gate.Dispose() }

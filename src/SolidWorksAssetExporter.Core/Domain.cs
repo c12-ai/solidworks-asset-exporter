@@ -29,6 +29,7 @@ namespace SolidWorksAssetExporter.Core
         public DocumentKind DocumentKind { get; set; }
         public bool IsSaved { get; set; }
         public bool IsDirty { get; set; }
+        public bool IsVirtualComponent { get; set; }
         public IDictionary<string, string> FileProperties { get; set; }
         public IDictionary<string, string> ConfigurationProperties { get; set; }
     }

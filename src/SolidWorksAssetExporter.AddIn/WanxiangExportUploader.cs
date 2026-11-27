@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using SolidWorksAssetExporter.Core;
 
 namespace SolidWorksAssetExporter.AddIn
@@ -17,6 +18,9 @@ namespace SolidWorksAssetExporter.AddIn
         public string RemoteProjectDirectory { get; set; }
         public string RemoteRegistryPath { get; set; }
         public string UploadLogPath { get; set; }
+        public string AssemblyParseEventId { get; set; }
+        public string AssemblyParseJobId { get; set; }
+        public string AssemblyParseError { get; set; }
     }
 
     public sealed class WanxiangExportUploader
@@ -33,6 +37,7 @@ namespace SolidWorksAssetExporter.AddIn
             if (settings == null) throw new ArgumentNullException("settings");
             settings.Validate();
             if (!settings.UploadAfterExport) throw new ValidationException("当前设置未启用导出后上传。");
+            settings.ValidateAssemblyParser();
 
             var log = WanxiangUploadLog.Create();
             log.Write("SESSION START base_url=" + settings.WanxiangBaseUrl + " export_project=" +
@@ -43,7 +48,7 @@ namespace SolidWorksAssetExporter.AddIn
                 using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl,
                     settings.WanxiangApiKey, log.Write))
                 {
-                    var completion = UploadCore(client, localExport, settings, progress, log);
+                    var completion = UploadCore(client, localExport, settings, progress, log, null);
                     completion.UploadLogPath = log.Path;
                     log.Write("SESSION COMPLETE assets=" + completion.AssetDirectoriesUploaded.ToString(
                         CultureInfo.InvariantCulture) + " new=" + completion.AssetVersionsRegistered.ToString(
@@ -70,15 +75,22 @@ namespace SolidWorksAssetExporter.AddIn
         public WanxiangUploadCompletion Upload(WanxiangDataClient client, ExportCompletion localExport,
             ExporterSettings settings, Action<string> progress)
         {
+            return Upload(client, localExport, settings, progress, null);
+        }
+
+        internal WanxiangUploadCompletion Upload(WanxiangDataClient client, ExportCompletion localExport,
+            ExporterSettings settings, Action<string> progress, HttpMessageHandler parserHandler)
+        {
             if (localExport == null) throw new ArgumentNullException("localExport");
             if (settings == null) throw new ArgumentNullException("settings");
             settings.Validate();
             if (!settings.UploadAfterExport) throw new ValidationException("当前设置未启用导出后上传。");
-            return UploadCore(client, localExport, settings, progress, null);
+            settings.ValidateAssemblyParser();
+            return UploadCore(client, localExport, settings, progress, null, parserHandler);
         }
 
         private WanxiangUploadCompletion UploadCore(WanxiangDataClient client, ExportCompletion localExport,
-            ExporterSettings settings, Action<string> progress, WanxiangUploadLog log)
+            ExporterSettings settings, Action<string> progress, WanxiangUploadLog log, HttpMessageHandler parserHandler)
         {
             if (client == null) throw new ArgumentNullException("client");
             var completion = new WanxiangUploadCompletion();
@@ -120,7 +132,7 @@ namespace SolidWorksAssetExporter.AddIn
                         registrations.Count.ToString(CultureInfo.InvariantCulture);
                     Report(progress, log, "正在上传 Asset " + ordinal + "：" + registration.AssetId);
                     var published = client.PublishAssetVersion(directory, registration.Uuid,
-                        registration.Version, registration.ContentFingerprint);
+                        registration.Version, registration.ContentFingerprint, registration.Name);
                     completion.AssetDirectoriesUploaded++;
                     if (published.Status == "registered") completion.AssetVersionsRegistered++;
                     else completion.AssetVersionsAlreadyRegistered++;
@@ -137,10 +149,12 @@ namespace SolidWorksAssetExporter.AddIn
                     var remoteProject = WanxiangRemotePath.Combine(remoteProjectRoot, projectRelative);
                     Report(progress, log, "Asset 上传完成，开始处理 Wanxiang assembly_package：" + remoteProject);
                     var projectResult = client.UploadDirectory(localExport.ProjectDirectory, remoteProject,
-                        delegate(string message) { Report(progress, log, message); });
+                        delegate(string message) { Report(progress, log, message); }, settings.NotifyAssemblyParser);
                     completion.FilesExtracted += projectResult.FilesExtracted;
                     completion.BytesWritten += projectResult.BytesWritten;
                     completion.RemoteProjectDirectory = remoteProject;
+                    if (settings.NotifyAssemblyParser)
+                        NotifyAssemblyParser(settings, projectResult, completion, progress, log, parserHandler);
                 }
 
                 if (settings.SaveRegistryLocally)
@@ -151,12 +165,38 @@ namespace SolidWorksAssetExporter.AddIn
                     Report(progress, log, "Wanxiang 注册表本地副本已更新。");
                 }
                 completion.RemoteRegistryPath = remoteRegistry;
-                Report(progress, log, "Wanxiang 上传完成：全部服务器响应均已收到并通过校验。");
+                Report(progress, log, string.IsNullOrEmpty(completion.AssemblyParseError)
+                    ? "Wanxiang 上传完成：全部服务器响应均已收到并通过校验。"
+                    : "Wanxiang 上传完成，解析通知提交失败。");
                 return completion;
             }
             finally
             {
                 if (File.Exists(downloadedRegistry)) File.Delete(downloadedRegistry);
+            }
+        }
+
+        private static void NotifyAssemblyParser(ExporterSettings settings, WanxiangDirectoryUploadResult projectResult,
+            WanxiangUploadCompletion completion, Action<string> progress, WanxiangUploadLog log, HttpMessageHandler handler)
+        {
+            Report(progress, log, "装配包上传完成，正在提交万象解析任务...");
+            try
+            {
+                using (var parser = new WanxiangAssemblyParserClient(settings.AssemblyParserBaseUrl,
+                    settings.AssemblyParserProviderToken, handler))
+                {
+                    var report = projectResult.ExportReport;
+                    var receipt = parser.Notify(report.AssemblyUuid, report.AssemblyVersion, projectResult.ExportReportSha256,
+                        settings.AssemblyParserProjectCode, settings.AssemblyParserProjectName);
+                    completion.AssemblyParseEventId = receipt.EventId;
+                    completion.AssemblyParseJobId = receipt.JobId;
+                    Report(progress, log, "万象已接收解析任务（HTTP 202）。任务 ID " + receipt.JobId + "，事件 ID " + receipt.EventId + "。");
+                }
+            }
+            catch (ValidationException ex)
+            {
+                completion.AssemblyParseError = ex.Message;
+                if (log != null) log.Write("ASSEMBLY PARSER NOTIFICATION FAILED " + WanxiangUploadLog.SummarizeResponse(ex.Message));
             }
         }
 

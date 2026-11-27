@@ -50,7 +50,7 @@ Sub main()
 
     answer = MsgBox("This operation will update and save " & CStr(changedCount) & " document(s)." & vbCrLf & _
         "Existing values of fields with the same name will be preserved." & vbCrLf & _
-        "Fields not listed in the CSV will be deleted." & vbCrLf & vbCrLf & _
+        "Exporter-managed fields will be preserved. Other fields outside the CSV will be deleted." & vbCrLf & vbCrLf & _
         "A complete source-file backup will be created before any change." & vbCrLf & _
         "Continue?", vbYesNo + vbExclamation + vbDefaultButton2, "Apply Custom Properties")
     If answer <> vbYes Then Exit Sub
@@ -232,10 +232,10 @@ Function DocumentNeedsChange(ByVal document As Object, ByVal allFields As Object
     Set manager = document.Extension.CustomPropertyManager("")
     Set existing = ExistingFields(manager)
     For Each key In existing.Keys
-        If Not required.Exists(CStr(key)) Then DocumentNeedsChange = True: Exit Function
+        If Not ExporterManaged(CStr(key)) And Not required.Exists(CStr(key)) Then DocumentNeedsChange = True: Exit Function
     Next key
     For Each key In required.Keys
-        If Not existing.Exists(CStr(key)) Then DocumentNeedsChange = True: Exit Function
+        If Not ExporterManaged(CStr(key)) And Not existing.Exists(CStr(key)) Then DocumentNeedsChange = True: Exit Function
     Next key
 End Function
 
@@ -352,13 +352,13 @@ Sub SyncDocument(ByVal document As Object, ByVal allFields As Object, ByVal part
     Set existing = ExistingFields(manager)
 
     For Each key In required.Keys
-        If Not existing.Exists(CStr(key)) Then
+        If Not ExporterManaged(CStr(key)) And Not existing.Exists(CStr(key)) Then
             status = CLng(manager.Add3(CStr(key), 30, CStr(required.Item(key)), 0))
             If status <> 0 Then Err.Raise vbObjectError + 201, , "Add3 failed for [" & CStr(key) & "] in " & path & "; status=" & status
         End If
     Next key
     For Each key In existing.Keys
-        If Not required.Exists(CStr(key)) Then
+        If Not ExporterManaged(CStr(key)) And Not required.Exists(CStr(key)) Then
             status = CLng(manager.Delete2(CStr(key)))
             If status <> 0 Then Err.Raise vbObjectError + 202, , "Delete2 failed for [" & CStr(key) & "] in " & path & "; status=" & status
         End If
@@ -369,6 +369,13 @@ Sub SyncDocument(ByVal document As Object, ByVal allFields As Object, ByVal part
         Err.Raise vbObjectError + 203, , "Save3 failed for " & path & "; errors=" & errors & "; warnings=" & warnings
     End If
 End Sub
+
+Function ExporterManaged(ByVal name As String) As Boolean
+    Select Case LCase$(name)
+        Case "connection_interface", "accepts_interfaces", "slots_num", "asset_version", "assembly_version"
+            ExporterManaged = True
+    End Select
+End Function
 
 Sub CopyFields(ByVal source As Object, ByRef destination As Object)
     Dim key As Variant

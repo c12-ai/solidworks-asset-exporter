@@ -64,6 +64,13 @@ Function CreateDictionary() As Object
     Set CreateDictionary = value
 End Function
 
+Function ExporterManaged(ByVal name As String) As Boolean
+    Select Case LCase$(name)
+        Case "connection_interface", "accepts_interfaces", "slots_num", "asset_version", "assembly_version"
+            ExporterManaged = True
+    End Select
+End Function
+
 Function LoadSchema(ByVal path As String, ByRef allFields As Object, ByRef partFields As Object, ByRef assemblyFields As Object) As Boolean
     Dim stream As Object
     Dim text As String
@@ -178,13 +185,13 @@ Sub AppendDocumentPreview(ByVal documents As Object, ByVal allFields As Object, 
         If Not IsEmpty(names) Then
             For Each name In names
                 existing(CStr(name)) = True
-                If Not required.Exists(CStr(name)) Then
+                If Not ExporterManaged(CStr(name)) And Not required.Exists(CStr(name)) Then
                     removals = removals & "<li class=""remove"">- " & HtmlEncode(CStr(name)) & "</li>"
                 End If
             Next name
         End If
         For Each field In required.Keys
-            If Not existing.Exists(CStr(field)) Then
+            If Not ExporterManaged(CStr(field)) And Not existing.Exists(CStr(field)) Then
                 additions = additions & "<li class=""add"">+ " & HtmlEncode(CStr(field)) & " = " & _
                     HtmlEncode(CStr(required.Item(field))) & "</li>"
             End If

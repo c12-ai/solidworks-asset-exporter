@@ -291,8 +291,16 @@ namespace SolidWorksAssetExporter.AddIn
             object namesObject;
             if (!packAndGo.GetDocumentNames(out namesObject)) throw new ValidationException("Pack and Go 无法读取装配体依赖。");
             var originalNames = ToStrings(namesObject);
+            if (originalNames.Any(string.IsNullOrWhiteSpace))
+                throw new ValidationException("Pack and Go 返回了空的源文件名。");
+            var entries = originalNames.Select((path, index) => new
+                {
+                    OriginalName = path,
+                    FullPath = PackAndGoSourcePath(path),
+                    Index = index
+                }).Where(item => item.FullPath != null).ToList();
             var allowed = new HashSet<string>(allowedFiles.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-            var packaged = new HashSet<string>(originalNames.Where(path => !string.IsNullOrWhiteSpace(path)).Select(Path.GetFullPath),
+            var packaged = new HashSet<string>(entries.Select(item => item.FullPath),
                 StringComparer.OrdinalIgnoreCase);
             // IC~~/VC~~ models are stored inside their owning SLDASM. SOLIDWORKS exposes
             // temporary paths for inspection, but Pack and Go correctly omits those paths
@@ -300,18 +308,11 @@ namespace SolidWorksAssetExporter.AddIn
             var missing = AssetSourcePathPolicy.MissingExternalFiles(allowed, packaged);
             if (missing.Count != 0)
                 throw new ValidationException("Pack and Go 未发现 Asset 层级模型：" + SummarizePaths(missing));
-            if (originalNames.Any(string.IsNullOrWhiteSpace))
-                throw new ValidationException("Pack and Go 返回了空的源文件名。");
-            var included = originalNames.Select((path, index) => new
-                {
-                    OriginalName = path,
-                    FullPath = Path.GetFullPath(path),
-                    Index = index
-                })
+            var included = entries
                 .Where(item => allowed.Contains(item.FullPath) &&
                     !AssetSourcePathPolicy.IsSessionEmbeddedModelPath(item.FullPath)).ToList();
-            var duplicateNames = originalNames.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
-                .Where(group => group.Count() > 1 && group.Any(path => allowed.Contains(Path.GetFullPath(path))))
+            var duplicateNames = entries.GroupBy(item => Path.GetFileName(item.FullPath), StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1 && group.Any(item => allowed.Contains(item.FullPath)))
                 .Select(group => group.Key).ToList();
             if (duplicateNames.Count != 0)
                 throw new ValidationException("Pack and Go 扁平打包时 Asset 文件与其他依赖重名：" +
@@ -411,6 +412,16 @@ namespace SolidWorksAssetExporter.AddIn
             if (array != null) return array.Select(value => Convert.ToString(value, CultureInfo.InvariantCulture)).ToList();
             var strings = values as string[];
             return strings == null ? new List<string>() : strings.ToList();
+        }
+
+        private static string PackAndGoSourcePath(string path)
+        {
+            // 3D Interconnect entries can be "temporary IC model|original STEP".
+            // These are embedded references, while their owning native files remain required.
+            var separator = path.IndexOf('|');
+            if (separator > 0 && AssetSourcePathPolicy.IsSessionEmbeddedModelPath(path.Substring(0, separator)))
+                return null;
+            return Path.GetFullPath(path);
         }
 
         private static string ResolvePackAndGoOutputPath(string saveName, string workingDirectory)

@@ -14,6 +14,9 @@
 | `零件名` | 文本 | 资产的人类可读名称。 | `快换盘-下` |
 | `class` | `movable` / `robot` / `station` / `structure` | 资产的主要分类。 | `movable` |
 | `asset_version` | 从 `1` 开始的正整数 | 当前资产的内容版本。 | `1` |
+| `can_hold_contents` | `1` / `0`，可省略 | 布尔值，表示硬件是否具备容纳能力。省略时按 `0` 处理。 | 锥形瓶填 `1` |
+| `slot_type` | `place`、`mount`、`clamp`、`thread`、`press_fit`、`snap_fit` | 仅对 `slots_num > 0` 的资产填写。普通承托槽选 `place`。 | 提供夹持环安装位的瓶填 `clamp` |
+| `engagement` | `loose`、`tight` | 资产的设计接合方式，默认选 `loose`。无槽资产也可定义接合方式。 | 固定局部相对位姿的设计填 `tight` |
 | `设计原理` | 文本 | 资产采用什么机械、电气或控制原理实现功能。 | `气缸驱动平行夹持` |
 | `设计目的` | 文本 | 资产要解决什么问题、实现什么用途。`class=robot` 时填写用于生成 UUID 的机器人名称。 | `夹持并转移压滤瓶`；Robot 填 `Hebe` |
 | `升版说明` | 文本 | 当前版本相对上一版本修改了什么。 | `调整夹指行程` |
@@ -27,7 +30,22 @@
 | `station` | 整体固定、机器人不会搬运，但机器人会与其发生放置、取出、定位、加工或换装交互的资产。 | 离心机、分析仪、固定工位、支架适配器、快换支架 |
 | `structure` | 机器人不能移动且不需要与之交互的结构。 | 框架、护栏、纯支撑结构 |
 
-`class` 与接口是两个独立维度。`station` 不会自动要求 `connection_interface`：Station 与机架、地面或底板永久固定且该关系不参与运行时装配校验时，该字段留空；只有 Station 本身是可拆换模块、需要对其上级连接进行建模时才填写。Station 仍可通过 `is_fixture=1` 和 `accepts_interfaces` 描述它接收的试管架、载具或快换组件。
+`class` 与接口是两个独立维度。声明机械 `accepts_interfaces` 的资产须同时定义经核实的 `connection_interface`。固定工位的 `connection_interface` 可以用实际安装面、定位基准或紧固方式定义。是否另外建立显式承载关系仍取决于业务用途。
+
+SOLIDWORKS 自定义属性的名称及复选框标签均为 `can_hold_contents`。选中写 `1`，取消选中写 `0`。资产 manifest 在顶层写入同名 JSON 布尔值。属性值为 `1` 时输出 `true`，为 `0` 或缺失时输出 `false`。瓶盖、底座等具有 CAD 模型的部件继续使用机械接口和承载关系。
+
+SOLIDWORKS 文件级自定义属性是 `slot_type` 和 `engagement` 的唯一来源。资产有槽时，按实际机构选择 `slot_type`，例如由瓶提供安装位，瓶盖或夹持环作为子资产。只在槽数大于零时读取并输出 `slot_type`。资产可独立定义 `engagement`，例如无槽的盖与主体接合。满足这些条件的非空值写入资产 manifest 的 `properties`。消费端决定具体实例的接合状态，并独立处理外部底座、固定和停放约束。
+
+| `slot_type` | 有效的 `engagement` | 定义 |
+| --- | --- | --- |
+| `place` | `loose` | 放置或承托，允许设计内的相对运动。 |
+| `mount` | `loose`、`tight` | 通过安装面或连接基准定位的安装槽。 |
+| `clamp` | `loose`、`tight` | 通过夹持机构和接触面约束的夹持槽。 |
+| `thread` | `loose`、`tight` | 由配对螺纹旋合安装。 |
+| `press_fit` | `loose`、`tight` | 由压入配合面安装，例如压入式盖或过盈配合。 |
+| `snap_fit` | `loose`、`tight` | 由卡扣或弹性卡缘越过止位后扣合。 |
+
+`tight` 表示设计会保持安装两侧的局部相对位姿，`loose` 表示设计允许局部相对运动。螺纹、压配或卡扣的形状证明安装方式，接合约束须另按设计核实。实际槽位、`slots_num` 和装配关系按其各自的设计依据维护。
 
 ## 2. 角色属性
 
@@ -63,7 +81,7 @@ is_fixture = 1
 | `connection_interface` | 当前资产作为子级时，用什么接口连接父级。只能表示一个接口。 | `法兰-4xM6-PCD30` |
 | `accepts_interfaces` | 当前资产作为父级时，可以接受哪些子级接口。多个接口用英文分号 `;` 分隔。 | `法兰-4xM6-PCD30;法兰-4xM8-PCD40` |
 
-没有显式承载关系时，普通资产（包括仅标记为 Fixture 的资产）和 Robot 可以留空接口。Tool 仍须填写 `connection_interface`，快换盘仍须填写两个接口字段，快换架仍须填写 `accepts_interfaces`。
+没有显式承载关系和机械 `accepts_interfaces` 时，普通资产（包括仅标记为 Fixture 的资产）和 Robot 可按用途留空接口。Tool 须填写 `connection_interface`，快换盘和快换架须填写两个接口字段。安装证据不足时记录具体缺项，保留已验证的机械接收接口。
 
 建立显式承载关系时，父级的接受接口列表必须包含子级的连接接口名称，并且名称须完全一致。
 
@@ -102,11 +120,19 @@ is_fixture = 1
 
 接口名称表示机械兼容性。两个对象接口名称相同，表示机械接口兼容，不表示它们的角色相同。
 
+上述机械接口名用于 SOLIDWORKS 内的绑定校验。资产导出清单使用 UUID 表示接口。`properties.connection_interface` 写入当前资产不带版本的 UUID。`properties.accepts_interfaces` 以分号分隔子资产 UUID，合并源属性已声明的 UUID 与当前装配中直接绑定的子资产 UUID。旧的机械接口名称不会被推断为某个子资产 UUID。
+
+机械接口候选名称由 Wanxiang 在线接口库集中维护。现有模型保存的接口名称继续作为精确匹配键。参见 [接口候选库](INTERFACE_CATALOG_GUIDE.md)。
+
+机械接口只表示可配合的实体部件。维护文件级属性时，从旧 `accepts_interface` 和 `accepts_interfaces` 中移除内容物标签，保留瓶盖、底座、工具等已核实的机械接口。`设计目的`、`设计原理` 和其它资产描述只写硬件用途、规格、容量和机械接口。容纳能力用布尔值 `can_hold_contents` 表达。
+
+导出时，`properties.零件名` 同时作为发布显示名。插件按万象注册表、本地已保存清单和本次导出批次检查跨 UUID 重名，比较时忽略大小写和首尾空白。重名时用资产 UUID 加稳定后缀，同一资产的各版本可复用该名称。CAD 文件名保持原有值。
+
 ## 4. 槽位和二维码属性
 
 | 属性 | 值 | 含义 | 示例 |
 | --- | --- | --- | --- |
-| `slots_num` | 大于或等于 `0` 的整数 | 资产提供多少个安装槽、工位、停放位或容纳位置。 | 双工位快换架填 `2` |
+| `slots_num` | 大于或等于 `0` 的整数 | 由插件保存的总槽位数，包含空槽。 | 双工位快换架为 `2` |
 | `has_QRcode` | `1` / `0` | 是否需要二维码标识。 | `1` |
 | `QR_num` | 大于或等于 `0` 的整数 | 二维码数量。 | `2` |
 | `QR_size` | 尺寸文本 | 单个二维码实体尺寸，单位由项目统一。 | `20mm` |
@@ -149,7 +175,7 @@ is_fixture             = 0
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 0
-connection_interface   =
+connection_interface   = 机器人底座.定位与紧固
 accepts_interfaces     = 法兰-4xM6-PCD30
 slots_num              = 0
 is_adjustable          = 0
@@ -237,7 +263,7 @@ is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 1
-connection_interface   =
+connection_interface   = 快换支架.底板安装面
 accepts_interfaces     = 快换盘-A
 slots_num              = 2
 is_adjustable          = 1
@@ -256,7 +282,7 @@ is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 0
-connection_interface   =
+connection_interface   = 试管架底座.工作台安装面
 accepts_interfaces     = 试管-D20
 slots_num              = 24
 is_adjustable          = 1
@@ -264,7 +290,7 @@ asset_version          = 1
 设计目的                 = 定位并承载50ml试管
 ```
 
-含义：固定试管架不能被机器人整体移动，但需要接收机器人放入的试管，因此属于 `station`；它接受外径 20 mm 的试管接口。其与工作台永久固定，所以 `connection_interface` 留空。
+固定试管架属于 `station`，接收机器人放入的外径 20 mm 试管，其向上接口取自已经核实的工作台安装面。
 
 ### 6.7 10 ml 试管
 
@@ -284,7 +310,7 @@ accepts_interfaces     =
 slots_num              = 0
 is_adjustable          = 0
 asset_version          = 1
-设计目的                 = 盛装并转移10ml样品
+设计目的                 = 提供10ml容量及机器人抓取定位面
 ```
 
 这里 `10ml` 是资产规格，`试管-D20` 才是与试管架匹配的机械接口。
@@ -295,7 +321,7 @@ asset_version          = 1
 
 ```text
 适配器底板（structure，或 is_asset=0）
-└─ 支架适配器（station，永久固定所以 connection_interface 为空）
+└─ 支架适配器（station，connection_interface=支架适配器.底板定位面）
    └─ 试管支架（movable，connection_interface=试管支架-A）
       └─ 试管（movable，connection_interface=试管-D20）
 ```
@@ -305,7 +331,7 @@ asset_version          = 1
 ```text
 class                  = station
 is_fixture             = 1
-connection_interface   =
+connection_interface   = 支架适配器.底板定位面
 accepts_interfaces     = 试管支架-A
 slots_num              = 1
 ```
@@ -319,7 +345,7 @@ connection_interface   = 试管支架-A
 accepts_interfaces     = 试管-D20
 ```
 
-适配器底板若只承担永久支撑，应使用 `class=structure`；若只是支架适配器组件内部的普通零件，则使用 `is_asset=0`。只有适配器本身需要从底板拆换并校验连接时，才给适配器填写 `connection_interface`，同时在底板填写对应的 `accepts_interfaces`。
+仅承担永久支撑的独立底板使用 `class=structure`，归入适配器几何的内部底板使用 `is_asset=0`。适配器的向上接口按实际安装基准定义。若底板作为独立资产接收可拆换的适配器，底板还需填写自己的向上接口和与适配器匹配的 `accepts_interfaces`，并按实际用途建立承载关系。
 
 ## 7. 资产连接关系
 

@@ -12,6 +12,8 @@ namespace SolidWorks.Interop.sldworks
     public interface DAssemblyDocEvents_Event
     {
         event Func<int> NewSelectionNotify;
+        event Func<int> ClearSelectionsNotify;
+        event Func<int> UserSelectionPostNotify;
         event Func<int> SaveToStorageNotify;
         event Func<int, string, int> FileSavePostNotify;
         event Func<int> FileSavePostCancelNotify;
@@ -30,6 +32,7 @@ namespace SolidWorks.Interop.sldworks
         public string GetUserPreferenceStringValue(int value) { return string.Empty; }
         public bool SetUserPreferenceStringValue(int value, string setting) { return true; }
         public object GetExportFileData(int type) { return null; }
+        public virtual object GetModeler() { return null; }
         public virtual object GetOpenDocumentByName(string path) { return null; }
         public string GetSearchFolders(int type) { return string.Empty; }
         public bool RunCommand(int commandId, string newTitle) { return true; }
@@ -44,16 +47,59 @@ namespace SolidWorks.Interop.sldworks
     public interface Component2
     {
         string Name2 { get; }
+        string GetSelectByIDString();
         int GetID(); int Visible { get; }
         object GetParent();
+        bool IsRoot();
         bool IsSuppressed(); int GetSuppression2(); int SetSuppression2(int state); bool IsEnvelope(); bool IsFixed(); bool IsHidden(bool considerSuppressed); bool Select4(bool append, object data, bool showPopup);
         object GetModelDoc2(); object GetChildren(); string GetPathName();
+        object GetBox(bool includeRefPlanes, bool includeSketches);
+        object GetBodies3(int type, out object bodyInfo);
+        object GetMates();
         bool IsVirtual { get; }
-        MathTransform Transform2 { get; }
+        int Solving { get; }
+        string ReferencedConfiguration { get; set; }
+        string ReferencedDisplayState { get; }
+        MathTransform Transform2 { get; set; }
     }
     public interface Frame { long GetHWndx64(); }
 
     public interface MathTransform { object ArrayData { get; } }
+
+    public interface Body2
+    {
+        bool Visible { get; }
+        object Copy();
+        bool ApplyTransform(MathTransform transform);
+        object GetMassProperties(double density);
+        object Operations2(int operation, object tool, out int error);
+        bool GetExtremePoint(double x, double y, double z, out double pointX, out double pointY, out double pointZ);
+    }
+
+    public interface Modeler
+    {
+        bool CheckInterferenceBetweenTwoBodies(object first, object second, bool coincident, out object firstFaces,
+            out object secondFaces, out object intersection);
+    }
+
+    public interface Mate2
+    {
+        int Type { get; }
+        int GetMateEntityCount();
+        MateEntity2 MateEntity(int index);
+    }
+
+    public interface MateEntity2
+    {
+        Component2 ReferenceComponent { get; }
+    }
+
+    public interface ModelView
+    {
+        event Func<int> BufferSwapNotify;
+        event Func<int> DestroyNotify;
+        void GraphicsRedraw(object rect);
+    }
 
     public interface ModelDoc2
     {
@@ -66,12 +112,20 @@ namespace SolidWorks.Interop.sldworks
         FeatureManager FeatureManager { get; }
         ModelDocExtension Extension { get; }
         object SelectionManager { get; }
-        void ClearSelection2(bool all); bool ShowConfiguration2(string name);
+        ModelView IActiveView { get; }
+        void ClearSelection2(bool all); bool ShowConfiguration2(string name); void GraphicsRedraw2();
+        object GetConfigurationNames(); object GetConfigurationByName(string name); bool EditRebuild3(); bool IsEditingSelf();
+        double ClosestDistance(object first, object second, out object point1, out object point2);
     }
 
+    public interface Entity
+    {
+        object GetComponent();
+    }
     public interface Feature
     {
         string GetTypeName2();
+        object IsSuppressed2(int configuration, object names);
     }
 
     public interface FeatureManager
@@ -96,6 +150,11 @@ namespace SolidWorks.Interop.sldworks
     public interface AssemblyDoc : ModelDoc2
     {
         int GetLightWeightComponentCount(); int ResolveAllLightWeightComponents(bool warnUser);
+        object GetComponents(bool topLevelOnly);
+        Component2 AddComponent5(string path, int configOption, string newConfigName, bool useExistingConfig,
+            string existingConfigName, double x, double y, double z);
+        bool SetComponentState(int suppression, object components, int configurationOption, string configuration, bool saveClosedDocuments);
+        bool Isolate(); bool ExitIsolate(); void SetIsolateVisibility(int option);
     }
     public interface View
     {
@@ -106,11 +165,14 @@ namespace SolidWorks.Interop.sldworks
     public interface Configuration
     {
         string Name { get; } Component2 GetRootComponent3(bool resolve); object GetDisplayStates();
-        int GetID();
+        int GetID(); bool GetComponentSuppressionState(string componentName);
     }
     public interface ModelDocExtension
     {
+        bool SelectByID2(string name, string type, double x, double y, double z, bool append, int mark, object callout, int option);
+        int MultiSelect2(object objects, bool append, object data);
         object GetPersistReference3(object value); object GetObjectByPersistReference3(object bytes, out int error);
+        bool DeleteSelection2(int options);
         PackAndGo GetPackAndGo(); object SavePackAndGo(PackAndGo value);
         bool SaveAs(string name, int version, int options, object exportData, ref int errors, ref int warnings);
         bool SaveAs3(string name, int version, int options, object exportData, object advancedSaveAsOptions,
@@ -125,8 +187,11 @@ namespace SolidWorks.Interop.sldworks
     {
         int GetSelectedObjectCount2(int mark); object GetSelectedObject6(int index, int mark);
         object GetSelectedObjectsComponent4(int index, int mark);
-        int GetSelectedObjectMark(int index); object CreateSelectData();
+        int GetSelectedObjectMark(int index); SelectData CreateSelectData();
+        int DeSelect2(object indices, int mark);
+        void set_SelectionColor(int mark, int color);
     }
+    public interface SelectData { int Mark { get; set; } }
     public interface ExportPdfData { bool SetSheets(int mode, object sheets); bool ViewPdfAfterSaving { get; set; } }
     public interface PackAndGo
     {
@@ -155,12 +220,22 @@ namespace SolidWorks.Interop.swconst
     public enum swFeatMgrPane_e { swFeatMgrPaneTop = 0, swFeatMgrPaneBottom = 1 }
     public enum swTreeControlItemType_e { swFeatureManagerItem_Feature = 1, swFeatureManagerItem_Component = 2 }
     public enum swComponentVisibilityState_e { swComponentHidden = 0, swComponentVisible = 1, swComponentUnknown = -1 }
+    public enum swIsolateVisibility_e { swIsolateVisibility_HIDDEN = 2 }
     public enum swComponentSuppressionState_e { swComponentSuppressed = 0, swComponentLightweight = 1, swComponentFullyResolved = 2, swComponentResolved = 3, swComponentFullyLightweight = 4, swComponentInternalIdMismatch = 5 }
+    public enum swComponentSolvingOption_e { swComponentRigidSolving = 0, swComponentFlexibleSolving = 1 }
+    public enum swBodyType_e { swSolidBody = 0 }
+    public enum swBodyInfo_e { swUserBody_e = 0, swNormalBody_e = 1 }
+    public enum swBodyOperationType_e { SWBODYINTERSECT = 15901 }
+    public enum swBodyOperationError_e
+    { swBodyOperationNoError = 0, swBodyOperationDisjointBodies = 5, swBodyOperationNoIntersect = 1067, swBodyOperationUnknownError = -1 }
     public enum swComponentResolveStatus_e { swResolveOk = 0, swResolveAbortedByUser = 1, swResolveNotPerformed = 2, swResolveError = 3 }
     public enum swCustomInfoGetResult_e { swCustomInfoGetResult_CachedValue = 0, swCustomInfoGetResult_NotPresent = 1, swCustomInfoGetResult_ResolvedValue = 2 }
     public enum swSummInfoField_e { swSumInfoCreateDate = 6 }
     public enum swDocumentTypes_e { swDocPART = 1, swDocASSEMBLY = 2, swDocDRAWING = 3 }
-    public enum swUserPreferenceIntegerValue_e { swStepAP, swStepExportPreference, swExportStlUnits, swSTLQuality }
+    public enum swInConfigurationOpts_e { swThisConfiguration = 1 }
+    public enum swUserPreferenceIntegerValue_e { swStepAP, swStepExportPreference, swExportStlUnits, swSTLQuality,
+        swSystemColorsSelectedItem1, swSystemColorsSelectedItem2, swSystemColorsSelectedItem3,
+        swSystemColorsSelectedItem4, swSystemColorsSelectedItem5, swSystemColorsSelectedItem6 }
     public enum swUserPreferenceToggle_e { swStepExportAtomicSave, swSTLBinaryFormat, swSTLDontTranslateToPositive, swSTLComponentsIntoOneFile, swSTLShowInfoOnSave, swSTLPreview, swSTLCheckForInterference }
     public enum swUserPreferenceStringValue_e { swExportOutputCoordinateSystem }
     public enum swAcisOutputGeometryPreference_e { swAcisOutputAsSolidAndSurface }

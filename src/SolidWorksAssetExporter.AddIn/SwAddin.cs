@@ -20,6 +20,8 @@ namespace SolidWorksAssetExporter.AddIn
         private ExportDialog _dialog;
         private InstanceBindingDialog _bindingDialog;
         private System.Windows.Forms.Control _uiDispatcher;
+        private McpPipeServer _mcpServer;
+        private McpSolidWorksTools _mcpTools;
 
         public bool ConnectToSW(object thisSw, int cookie)
         {
@@ -37,6 +39,13 @@ namespace SolidWorksAssetExporter.AddIn
                 _uiDispatcher = new System.Windows.Forms.Control();
                 if (_uiDispatcher.Handle == IntPtr.Zero) throw new InvalidOperationException("无法创建 SW 界面线程调度窗口。");
                 AddCommands();
+                try
+                {
+                    _mcpTools = new McpSolidWorksTools(_application, () =>
+                        (_dialog != null && _dialog.Busy) || (_bindingDialog != null && _bindingDialog.Busy));
+                    _mcpServer = new McpPipeServer(_uiDispatcher, _mcpTools.Call, WriteDiagnostic);
+                }
+                catch (Exception ex) { WriteDiagnostic("MCP pipe could not start: " + ex); }
                 WriteDiagnostic("ConnectToSW succeeded.");
                 return true;
             }
@@ -52,6 +61,8 @@ namespace SolidWorksAssetExporter.AddIn
             var stage = "close dialog";
             try
             {
+                if (_mcpServer != null) { _mcpServer.Dispose(); _mcpServer = null; }
+                _mcpTools = null;
                 // FormClosed clears _dialog. Keep a local reference so shutdown never
                 // dereferences the field after Close() has raised that event.
                 var dialog = _dialog;
@@ -84,9 +95,10 @@ namespace SolidWorksAssetExporter.AddIn
 
         public void OnExport()
         {
-            if (_application == null || DispatchToUi(OnExport)) return;
+            if (_application == null || DispatchToUi(OnExport) || (_mcpTools != null && _mcpTools.Running)) return;
             if (_dialog != null && !_dialog.IsDisposed) { _dialog.Activate(); return; }
-            _dialog = new ExportDialog(_application); _dialog.FormClosed += delegate { _dialog = null; }; _dialog.Show();
+            _dialog = new ExportDialog(_application) { McpRunning = () => _mcpTools != null && _mcpTools.Running };
+            _dialog.FormClosed += delegate { _dialog = null; }; _dialog.Show();
         }
 
         public int CanExport()
@@ -99,9 +111,9 @@ namespace SolidWorksAssetExporter.AddIn
         {
             try
             {
-                if (_application == null || DispatchToUi(OnInstanceBindings)) return;
+                if (_application == null || DispatchToUi(OnInstanceBindings) || (_mcpTools != null && _mcpTools.Running)) return;
                 if (_bindingDialog != null && !_bindingDialog.IsDisposed) { _bindingDialog.Activate(); return; }
-                _bindingDialog = new InstanceBindingDialog(_application);
+                _bindingDialog = new InstanceBindingDialog(_application) { McpRunning = () => _mcpTools != null && _mcpTools.Running };
                 _bindingDialog.FormClosed += delegate { _bindingDialog = null; };
                 _bindingDialog.Show(new SwWindowOwner(new IntPtr(_application.IFrameObject().GetHWndx64())));
             }

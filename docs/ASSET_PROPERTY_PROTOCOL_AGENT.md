@@ -8,6 +8,8 @@
 
 Robot 的跨语言身份与路径解析以 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md) 为准；普通 Asset UUID 与 Wanxiang 发布契约不变。
 
+在 SOLIDWORKS 中，Agent 通过插件 MCP 更新 `connection_interface`、`accepts_interfaces` 和 `slots_num`。普通资产版本和装配包版本由插件维护。示例中的值说明存储语义。操作方法见 [MCP 使用指南](MCP.md)。
+
 ## 1. 数据模型
 
 每个 Asset 由一组键值属性描述。属性在存储层均为字符串，Agent 必须按本协议声明的逻辑类型解释。
@@ -52,6 +54,9 @@ Agent 生成新数据时必须使用 `1` 或 `0`。
 | `accepts_interfaces` | interface-id list | 以 `;` 分隔的接口名或空 | 当前 Asset 作为父级时，能够接收的子级接口集合。 | `法兰-4xM6-PCD30;法兰-4xM8-PCD40` |
 | `slots_num` | integer | 大于或等于 `0` | Asset 提供的安装槽、工位、停放位或容纳位置数量。`0` 表示不提供槽位。 | `2` |
 | `is_adjustable` | boolean | `1` / `0` | Asset 的安装位姿或空间布局位置是否允许调整。 | `1` |
+| `can_hold_contents` | boolean | `1` / `0`，可省略 | 硬件是否具备容纳能力。省略时按 `0` 处理。 | 锥形瓶填 `1` |
+| `slot_type` | enum | `place`、`mount`、`clamp`、`thread`、`press_fit`、`snap_fit` | 仅在 `slots_num > 0` 时填写，普通承托槽选 `place`。 | `thread` |
+| `engagement` | enum | `loose`、`tight` | 硬件设计接合方式，默认选 `loose`。无槽资产也可定义。 | `tight` |
 | `asset_version` | integer | 大于 `0` | Asset 内容版本，从 `1` 开始递增。 | `1` |
 | `has_QRcode` | boolean | `1` / `0` | Asset 是否具有二维码标识需求。 | `1` |
 | `QR_num` | integer | 大于或等于 `0` | 二维码数量。 | `2` |
@@ -66,14 +71,18 @@ Agent 生成新数据时必须使用 `1` 或 `0`。
 
 | 值 | 语义 | 典型对象 |
 | --- | --- | --- |
-| `movable` | 能够被机器人移动、抓取或转移的对象。 | 工具、夹指、快换盘、试管、可搬运样品载具 |
+| `movable` | 能够被机器人移动、抓取或转移的对象。 | 工具、夹指、快换盘、试管、可搬运载具 |
 | `robot` | 提供运动执行能力的机器人。 | Hebe、Talos |
 | `station` | 整体固定、机器人不会搬运，但机器人会与其发生放置、取出、定位、加工或换装交互的对象。 | 离心机、分析仪、固定工位、支架适配器、快换支架 |
 | `structure` | 机器人不能移动且不需要与之交互的结构。 | 框架、护栏、纯支撑结构 |
 
 `class` 是单值主分类；`is_tool`、`is_fixture`、`is_quick_changer` 等是可组合角色。禁止使用旧值 `moveable`。
 
-`class` 与接口属性正交。禁止从 `class=station` 推导 `connection_interface` 必填：永久固定且不参与运行时装配校验的 Station，其 `connection_interface` 必须允许为空；只有 Station 作为可拆换子级、其上级连接需要建模时才填写。Station 若接收其他对象，应独立使用 `is_fixture=1` 和 `accepts_interfaces` 描述向下接口。
+`class` 独立于接口属性。凡是声明机械 `accepts_interfaces` 的资产，都须有经核实的 `connection_interface`。固定工位按实际安装面、定位基准或紧固方式定义向上接口。缺少证据时记录具体缺项，保留已核实的机械接收接口。显式承载关系另按业务用途判断。
+
+资产描述只登记硬件的用途、规格、容量和机械接口。容纳能力通过 CAD 属性 `can_hold_contents` 表达。维护已有资产时清除描述和机械接口中的内容物词条，保留瓶盖、工具等实体机械接口。导出 manifest 的 `can_hold_contents` 位于顶层，类型为 JSON 布尔值。
+
+从 SOLIDWORKS 文件级自定义属性读取槽位类型和接合方式。有设计槽位时按机构填写 `slot_type`，再按局部相对运动约束填写 `engagement`。无槽或容量未声明时留空 `slot_type`，资产仍可单独定义 `engagement`。有螺纹时分别核实旋合结构和接合约束。提供安装位的主体为父资产，例如瓶是父资产，瓶盖或夹持环是子资产。符合这些条件的非空值输出到资产 manifest 的 `properties`。装配关系记录实际槽位、候选和位姿。具体实例的接合、松开、搬运与外部固定由消费端控制。
 
 ## 4. 角色语义
 
@@ -231,6 +240,9 @@ is_quick_changer_rack=1
     => class=station
     => accepts_interfaces 非空
 
+accepts_interfaces 含机械接口
+    => connection_interface 非空
+
 is_tool=1
     => connection_interface 非空
 
@@ -241,7 +253,7 @@ class=robot
     => is_quick_changer_rack=0
 ```
 
-没有显式承载关系时，普通资产（包括仅标记为 Fixture 的资产）和 Robot 可以留空接口。Tool、快换盘和快换架仍须满足上述角色的接口约束。
+没有显式承载关系和机械 `accepts_interfaces` 时，普通资产（包括仅标记为 Fixture 的资产）和 Robot 可按用途留空接口。Tool、快换盘和快换架仍须满足上述角色的接口约束。
 
 二维码组合：
 
@@ -264,7 +276,7 @@ is_fixture             = 0
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 0
-connection_interface   =
+connection_interface   = 机器人底座.定位与紧固
 accepts_interfaces     = 法兰-4xM6-PCD30
 slots_num              = 0
 is_adjustable          = 0
@@ -348,7 +360,7 @@ is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 1
-connection_interface   =
+connection_interface   = 快换支架.底板安装面
 accepts_interfaces     = 快换盘-A
 slots_num              = 2
 is_adjustable          = 1
@@ -367,7 +379,7 @@ is_fixture             = 1
 is_quick_changer       = 0
 quick_changer_side     =
 is_quick_changer_rack  = 0
-connection_interface   =
+connection_interface   = 试管架底座.工作台安装面
 accepts_interfaces     = 试管-D20
 slots_num              = 24
 is_adjustable          = 1
@@ -393,7 +405,7 @@ accepts_interfaces     =
 slots_num              = 0
 is_adjustable          = 0
 asset_version          = 1
-设计目的                 = 盛装并转移10ml样品
+设计目的                 = 提供10ml容量及机器人抓取定位面
 ```
 
 ### Station tube hierarchy
@@ -403,14 +415,14 @@ Canonical minimal model:
 ```text
 AdapterBase:       class=structure OR is_asset=0
 RackAdapter:       class=station, is_fixture=1,
-                   connection_interface="", accepts_interfaces=试管支架-A
+                   connection_interface=支架适配器.底板定位面, accepts_interfaces=试管支架-A
 TubeRack:          class=movable, is_fixture=1,
                    connection_interface=试管支架-A, accepts_interfaces=试管-D20
 Tube:              class=movable, is_fixture=0,
                    connection_interface=试管-D20, accepts_interfaces=""
 ```
 
-Do not create an interface edge between `AdapterBase` and `RackAdapter` when that joint is permanent and irrelevant to runtime assembly validation. If the adapter is a replaceable module, model that additional edge explicitly by assigning the adapter a `connection_interface` and the base the matching `accepts_interfaces`.
+`RackAdapter` 的向上接口取自已核实的底板定位面。若底板是独立资产并接收可拆换适配器，补齐底板自己的向上接口和匹配的 `accepts_interfaces`，再按实际用途建立显式承载关系。
 
 ## 9. 版本与身份语义
 

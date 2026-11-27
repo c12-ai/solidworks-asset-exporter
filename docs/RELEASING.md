@@ -2,6 +2,8 @@
 
 本文保留 `v1.0.5` 发布流程与历史说明。当前源码的机器人引用规则已更新，以 [Robot Asset 引用协议](ROBOT_ASSET_REFERENCE_PROTOCOL.md) 为准；发布后续版本时应使用新规则验收，不沿用下方历史格式。
 
+开发分支换机验收使用每次 GitHub Actions `CI` 生成的 `SolidWorksAssetExporter-package-<运行编号>`。安装和连通性检查见 [Windows 快速安装](../README.md#windows-快速安装)。
+
 ## 1. 发布前检查
 
 发布必须从已经合并并通过 CI 的 `main` 创建，不能直接从尚未合并的功能分支打标签：
@@ -52,9 +54,13 @@ README.md
 RELEASING.md
 Install.cmd
 Uninstall.cmd
+Install-Codex.cmd
+install-codex.ps1
 set-interactive-user-startup.ps1
 payload\SolidWorksAssetExporter.AddIn.dll
 payload\SolidWorksAssetExporter.Core.dll
+payload\SolidWorksAssetExporter.Mcp.exe
+skills\solidworks-asset-exporter\SKILL.md
 Install-CustomPropertyTemplates.ps1
 custom-properties\part.prtprp
 custom-properties\asem.asmprp

@@ -1,10 +1,10 @@
 # 接口候选库与只读属性模板
 
-适用于 v1.1.0-rc3（文件版本 1.1.0.2）及兼容接口库格式 1.0 的插件。本次是接口库与模板补充包，不需要更换插件 DLL。
+接口候选库由配置的 Wanxiang 数据服务集中保存。连接相同服务的客户端通过承载关系面板的“接口属性 / 建议…”或 MCP 读取和添加候选。
 
 ## 旧属性保留
 
-已经填好的 `connection_interface`、`accepts_interfaces` 不要删除。插件编辑的是这两个原有文件级自定义属性；打开窗口会读取原值，导出继续读取它们。候选库更新不会改模型、迁移旧名称或自动增加资产版本。
+插件继续读取已有文件级 `connection_interface`、`accepts_interfaces` 和 `slots_num`。已有接口名称继续按原字符串匹配。旧候选文件 `%APPDATA%\SolidWorksAssetExporter\interfaces.json` 仍可用于离线查询和迁移。
 
 ## 命名方式
 
@@ -14,23 +14,27 @@
 
 这些是录入候选，不是经过验证的兼容性数据库：相同容量或孔数的不同厂家可能具有不同外形、口径和定位结构。采用基础名称前应确认它在项目内代表同一种实际接口；有差异时增加尺寸或型号，分别命名。没有尺寸的候选没有暗含默认直径。`试管.15ml.D20` 是命名示例，不声明所有 15 ml 试管直径均为 20 mm。
 
-父级 `accepts_interfaces` 中的值必须与子级 `connection_interface` 完全一致，包括大小写和单位写法。旧名称照常有效；不能只给一侧改名。多个接受接口在模型中使用英文分号分隔，插件窗口中通过勾选操作。容量仍由 `slots_num` 表达；接口名不建立槽位分配或空位确认。
+父级 `accepts_interfaces` 中的值必须与子级 `connection_interface` 一致，包括大小写和单位写法。多个接受接口在模型中使用英文分号分隔，在 MCP 中通过数组传入。`slots_num` 记录包含空槽的总容量。
 
 ## 使用
 
-1. 关闭并重新打开“承载关系 → 接口属性 / 建议…”窗口；向上接口下拉框可输入中文类别前缀进行自动补全。
-2. 选择已有候选，或直接输入符合项目实际规格的新名称。也可用“添加新接口选项”把自定义名称加入当前窗口，随后选择/勾选它。
-3. 先保存子资产的连接接口，再选父资产生成接受接口建议并确认保存。保存成功的新名称会追加到本机接口库。
+接口目录只维护机械接口。容纳能力用容器的布尔值 `can_hold_contents` 表达。客户端会隐藏已知的旧内容物候选，并拒绝新增这些名称。
+
+Agent 用 `interface_catalog` 查询候选，必要时用 `interface_catalog_add` 加入已确认的名称，再通过 `asset_update_interfaces` 应用到资产。读取结果包含 `interfaces`、`source` 和离线时的 `warning`。旧候选可以读取本机 JSON 的 `interfaces` 数组，作为 `interface_catalog_add` 的 `names` 参数批量迁入。详见 [MCP 使用指南](MCP.md)。
+
+在线库使用 Wanxiang 已配置的地址和凭据，读写 NAS 上的 `asset-interface-catalog/v2/`。每个名称保存在一个 UTF-8 JSON 文件中，内容为 `{"schema_version":"1.0","name":"试管.15ml.D20"}`，文件名为接口名称的 SHA-256 加 `.json`。`.json` 属于 `wanxiang-sync` 的已知分类。重试同名请求是幂等的，不同名称的并发新增互不覆盖。网络故障时可继续查离线候选，新增失败会返回错误。
 
 ## 模板修改范围
 
-零件 `part.prtprp`、装配 `asem.asmprp` 的两个接口控件使用 `ReadOnly="True"`，标题附“插件维护”。属性键、文件级 `ApplyTo="Global"`、原有默认值和其他控件保持原样。
+零件 `part.prtprp` 和装配 `asem.asmprp` 按基础属性、资产角色、接口与槽位、二维码、设计说明排列。选“是”才显示资产分组。选择 Robot 显示外部引用版本。勾选 `is_quick_changer` 显示侧别，勾选 `has_QRcode` 显示二维码数量、尺寸和间距。非资产装配体显示工位选项，勾选 `is_workstation` 后显示工位名称。
 
-只读作用于自定义属性任务窗格的模板控件，不是模型权限锁。SW 的“文件 → 属性”窗口和 API 仍能编辑原属性；Robot 等尚不支持在承载关系窗口中编辑的对象，可使用该原生入口。保留属性并显示只读值，避免模板和插件之间反复手工同步。
+自由文本只开放 `设计目的`、`设计原理` 和 `升版说明`。机械接口和设计槽数在插件维护。`slot_type` 和 `engagement` 在属性面板中使用固定选项下拉框。SOLIDWORKS 原生模板的数字控件不支持按槽数隐藏下拉框。槽数为 0 或空白时，`slot_type` 可留空，或在原生列表选“不适用（无槽）”。有槽时请选择实际槽型。 [SOLIDWORKS 数字控件说明](https://help.solidworks.com/2025/English/SolidWorks/oh_propertytabbuilder/r_Number.htm)
+
+插件的“接口属性 / 建议…”在槽数大于零时显示槽位类型。两个入口读取和写入同一份 SOLIDWORKS 文件级自定义属性。打开插件编辑器时读取当前文件属性。若在其它入口修改了已打开的资产，可在插件中重新读取文件属性。完成原生编辑后保存源文件，使更改持久化。
 
 ## 应用补充包
 
-`Install-InterfaceOptions.ps1` 直接修改现有模板的两个控件，保留模板中的其他定制。默认仅预览，指定 `-Apply` 才实际更新。候选名称合并到当前 Windows 用户的 `%APPDATA%\SolidWorksAssetExporter\interfaces.json`，保留旧名称和原有大小写；不会修改 `SLDPRT`/`SLDASM` 或 SW 注册表设置。
+`Install-InterfaceOptions.ps1` 更新现有模板中的相关控件，并合并当前 Windows 用户的候选名称。默认仅预览，指定 `-Apply` 才实际更新。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-InterfaceOptions.ps1 -TemplateDirectory "C:\C12_SolidWorksTemplate\自定义属性"
@@ -39,4 +43,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-InterfaceOptions.p
 
 更新前备份所有将改写的文件，输出备份目录及 `manifest.json`；其中记录原路径、原哈希和是否原本存在。接口库使用与插件一致的互斥文件锁及临时文件替换，模板按文件替换；若中途失败，已成功更新的文件会保留改动，按备份清单恢复即可，不承诺跨文件原子更新。
 
-刷新方式：关闭接口编辑窗口并重新打开；自定义属性任务窗格重新选择模板或按 F5 刷新。模板按文档类型显示的机制见 [SOLIDWORKS 官方说明](https://help.solidworks.com/2022/english/SolidWorks/oh_propertytabbuilder/t_tab_builder_creating_tab.htm)。
+在自定义属性任务窗格重新选择模板或按 F5 刷新。模板按文档类型显示的机制见 [SOLIDWORKS 官方说明](https://help.solidworks.com/2022/english/SolidWorks/oh_propertytabbuilder/t_tab_builder_creating_tab.htm)。

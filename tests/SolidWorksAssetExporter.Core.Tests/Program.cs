@@ -7,9 +7,11 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 using System.Xml.Linq;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -24,7 +26,10 @@ namespace SolidWorksAssetExporter.Core.Tests
 
         private static int Main()
         {
+            RunMcpTests();
             RunInstanceBindingTests();
+            RunExportPlacementDiagnosticTests();
+            RunContactDiagnosticTests();
             Run("Asset boundary never reads children", AssetBoundaryNeverReadsChildren);
             Run("Asset subassembly stays opaque", AssetSubassemblyStaysOpaque);
             Run("Asset parent skips child property validation", AssetParentSkipsChildPropertyValidation);
@@ -48,6 +53,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Relative transform and quaternion", RelativeTransformAndQuaternion);
             Run("XML has leaf mesh references", XmlLeafReferences);
             Run("Workstation XML preserves hierarchy and references", WorkstationXml);
+            Run("Asset, Robot and part geometry ignore stale workstation properties", NonWorkstationXmlIgnoresStaleProperties);
             Run("Workstation names are required and kinds stay distinct", WorkstationValidation);
             Run("Robot is an assembly_package XML reference and never an Asset", RobotIsProjectReference);
             Run("Robot UUID matches the published name protocol", RobotUuidMatchesPublishedProtocol);
@@ -56,6 +62,7 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Relations format migration changes the package fingerprint", NonRobotPackageFingerprintIsUnchanged);
             Run("Robot reference migration requires a new package version", RobotReferenceMigrationRequiresNewPackageVersion);
             Run("assembly_package export can be disabled", ProjectExportCanBeDisabled);
+            Run("Project geometry identity does not depend on creation time", ProjectUnitsWithoutCreationTime);
             Run("Manifest validates hashes and conflicts", ManifestValidation);
             Run("STL geometry fingerprint ignores export metadata and facet order", StlFingerprintIgnoresMetadata);
             Run("Missing and false-valued optional properties are equivalent", OptionalPropertyDefaultsAreEquivalent);
@@ -71,11 +78,12 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Pack and Go may omit embedded virtual model paths", PackAndGoMayOmitEmbeddedVirtualPaths);
             Run("Pack and Go activates the Asset subassembly only", PackAndGoActivatesAssetSubassemblyOnly);
             Run("Pack and Go isolates references outside the Asset boundary", PackAndGoExcludesOutsideAssetReferences);
+            Run("Pack and Go accepts embedded 3D Interconnect compound references", PackAndGoAcceptsInterconnectCompoundReferences);
             Run("Pack and Go accepts a shorter status array when Asset outputs exist", PackAndGoAcceptsShorterStatusArray);
             Run("Pack and Go does not require an embedded virtual child output", PackAndGoAllowsEmbeddedVirtualChild);
             Run("Asset registry persists one entry per Asset ID", AssetRegistryPersistsOneEntryPerAssetId);
             Run("Asset version policy decides reuse and required upgrades", AssetVersionPolicyDecidesUpgrades);
-            Run("Assets requiring version upgrade open for editing", AssetsRequiringUpgradeOpenForEditing);
+            Run("Version upgrade listing leaves documents unchanged and opens only the selected Asset", VersionUpgradeOpensOnlySelectedAsset);
             Run("Embedded Asset root is never opened for version editing", EmbeddedAssetRootIsNeverOpenedForVersionEditing);
             Run("Unregistered local Asset conflict is quarantined for rebuild", UnregisteredLocalAssetConflictIsQuarantined);
             Run("Asset registry imports every manifest for one UUID", AssetRegistryImportsEveryManifestForUuid);
@@ -86,6 +94,8 @@ namespace SolidWorksAssetExporter.Core.Tests
             Run("Wanxiang upload diagnostics include HTTP response without API key", WanxiangUploadDiagnosticsAreSafe);
             Run("Wanxiang upload log is readable and single-line", WanxiangUploadLogIsReadable);
             Run("Wanxiang export atomically publishes Asset then uploads Project", WanxiangExportUsesAtomicPublication);
+            Run("Wanxiang submits parsing after the archive write using the uploaded report bytes", WanxiangNotifiesParserAfterArchiveUpload);
+            Run("Wanxiang keeps archive and parsing notification outcomes distinct", WanxiangDistinguishesParserNotificationFailure);
             Run("Wanxiang upload skips Project when disabled", WanxiangUploadSkipsDisabledProject);
             Run("Wanxiang preview reads remote registry without local cache by default", WanxiangPreviewUsesRemoteRegistry);
             Run("Wanxiang missing remote registry is treated as an empty library", WanxiangMissingRegistryIsEmpty);
@@ -343,8 +353,9 @@ namespace SolidWorksAssetExporter.Core.Tests
                 };
                 var app = new FakeSldWorks(original, target);
 
-                True(PropertyRules.ReadIsAsset(new SwCadNode(app, component, "/virtual")
-                    .ClassificationModel.FileProperties));
+                var model = new SwCadNode(app, component, "/virtual").ClassificationModel;
+                True(model.IsVirtualComponent);
+                True(PropertyRules.ReadIsAsset(model.FileProperties));
                 Equal((int)swComponentSuppressionState_e.swComponentLightweight, component.SuppressionState);
                 Equal(2, component.SuppressionChanges.Count);
                 Equal((int)swComponentSuppressionState_e.swComponentResolved, component.SuppressionChanges[0]);
@@ -866,6 +877,56 @@ namespace SolidWorksAssetExporter.Core.Tests
             }
         }
 
+        private static void NonWorkstationXmlIgnoresStaleProperties()
+        {
+            var root = Root();
+            root.Model.FileProperties[PropertyRules.IsWorkstation] = "1";
+            root.Model.FileProperties[PropertyRules.WorkstationName] = "有效工位";
+            var asset = Node("asset", false, true); MarkAsset(asset, 2);
+            var robot = Node("robot", false, true); MarkRobot(robot, "Hebe", 3);
+            var part = Node("part", false, false);
+            part.Model.DocumentKind = DocumentKind.Part;
+            part.Model.FileName = "part.SLDPRT";
+            part.Model.FullPath = "C:\\models\\part.SLDPRT";
+            foreach (var node in new[] { asset, robot, part })
+            {
+                node.Model.FileProperties[PropertyRules.LegacyIsWorkstation] = "1";
+                node.Model.FileProperties[PropertyRules.LegacyWorkstationName] = "旧工位";
+            }
+            robot.Model.FileProperties[PropertyRules.IsWorkstation] = "0";
+            part.Model.FileProperties[PropertyRules.IsWorkstation] = "0";
+            root.Add(asset, robot, part);
+            var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(root), ProjectMeshFormat.Step);
+            var temp = TempDirectory();
+            try
+            {
+                var path = Path.Combine(temp, "assembly.xml");
+                AssemblyXmlWriter.Write(path, plan);
+                var nodes = XDocument.Load(path).Descendants("node").ToList();
+                var workstation = nodes.Single(node => (string)node.Attribute("kind") == "workstation");
+                Equal("有效工位", (string)workstation.Attribute("workstation_name"));
+                True(workstation.Element("mesh") == null);
+                foreach (var expected in new[]
+                {
+                    new { Source = asset, Kind = "asset" },
+                    new { Source = robot, Kind = "robot" },
+                    new { Source = part, Kind = "meshes" }
+                })
+                {
+                    var child = plan.Roots[0].Children.Single(node => node.Source == expected.Source);
+                    var element = nodes.Single(node => (string)node.Attribute("id") == child.Id);
+                    Equal(expected.Kind, (string)element.Attribute("kind"));
+                    Equal((string)workstation.Attribute("id"), (string)element.Attribute("parent_id"));
+                    True(element.Attribute("workstation_name") == null);
+                    if (child.Kind == ExportNodeKind.Meshes)
+                        Equal(child.MeshFile, (string)element.Element("mesh").Attribute("file"));
+                    else
+                        Equal(child.AssetId, (string)element.Element("mesh").Attribute("asset_id"));
+                }
+            }
+            finally { Directory.Delete(temp, true); }
+        }
+
         private static void WorkstationValidation()
         {
             var legacy = Root();
@@ -895,6 +956,8 @@ namespace SolidWorksAssetExporter.Core.Tests
             normal.Add(group);
             var plan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(normal), ProjectMeshFormat.Step);
             Equal(ExportNodeKind.Group, plan.Roots[0].Kind);
+            plan.Roots[0].MeshFile = "meshes/unit/model.step";
+            Throws<ValidationException>(() => ExportPlanValidator.Validate(plan));
 
             var empty = Root();
             empty.Model.FileProperties[PropertyRules.IsWorkstation] = "yes";
@@ -902,6 +965,9 @@ namespace SolidWorksAssetExporter.Core.Tests
             var emptyPlan = new ExportPlanBuilder().Build(new AssemblyScanner().Scan(empty), ProjectMeshFormat.Step);
             Equal(ExportNodeKind.Workstation, emptyPlan.Roots[0].Kind);
             Equal("空工位", AssemblyXmlWriter.WorkstationName(emptyPlan.Roots[0]));
+            emptyPlan.Roots[0].AssetId = "asset:1";
+            Throws<ValidationException>(() => ExportPlanValidator.Validate(emptyPlan));
+            emptyPlan.Roots[0].AssetId = null;
             emptyPlan.Roots[0].Properties[PropertyRules.WorkstationName] = " ";
             Throws<ValidationException>(() => ExportPlanValidator.Validate(emptyPlan));
         }
@@ -986,6 +1052,9 @@ namespace SolidWorksAssetExporter.Core.Tests
                 JsonFile.Write(Path.Combine(versionDir, "export-report.json"), report);
                 Equal(ExistingProjectState.Reusable, ProjectReportValidator.Inspect(versionDir, uuid, 2, "project-fingerprint"));
                 Throws<ValidationException>(() => ProjectReportValidator.Inspect(versionDir, uuid, 2, "changed"));
+                Equal(ExistingProjectState.ContentChanged, ProjectReportValidator.InspectVersion(versionDir, uuid, 2, "changed"));
+                File.Delete(Path.Combine(versionDir, xml));
+                Throws<ValidationException>(() => ProjectReportValidator.InspectVersion(versionDir, uuid, 2, "changed"));
             }
             finally { Directory.Delete(temp, true); }
         }
@@ -1433,6 +1502,55 @@ namespace SolidWorksAssetExporter.Core.Tests
             finally { Directory.Delete(settings.AssetLibraryRoot, true); }
         }
 
+        private static void ProjectUnitsWithoutCreationTime()
+        {
+            var root = Root();
+            var first = Node("virtual-part", false, false);
+            var second = Node("virtual-part", false, false);
+            root.Add(Node("branch-a", true, true).Add(first), Node("branch-b", true, true).Add(second));
+            foreach (var node in new[] { first, second })
+            {
+                node.Model.FileName = "virtual-part^subassembly.SLDPRT";
+                node.Model.DocumentKind = DocumentKind.Part;
+                node.Model.InternalCreationTime = string.Empty;
+                node.Model.IsVirtualComponent = true;
+            }
+
+            var scanner = new AssemblyScanner();
+            var builder = new ExportPlanBuilder();
+            var plan = builder.Build(scanner.Scan(root), ProjectMeshFormat.Step);
+            var firstUuid = plan.Roots[0].Children[0].GeometryUuid;
+            True(firstUuid != plan.Roots[1].Children[0].GeometryUuid);
+            first.Model.FullPath = @"C:\another-session\virtual-part^subassembly.SLDPRT";
+            Equal(firstUuid, builder.Build(scanner.Scan(root), ProjectMeshFormat.Step).Roots[0].Children[0].GeometryUuid);
+
+            first.Model.InternalCreationTime = "2026-01-02T03:04:05.0000000";
+            Equal(firstUuid, builder.Build(scanner.Scan(root), ProjectMeshFormat.Step).Roots[0].Children[0].GeometryUuid);
+            first.Model.InternalCreationTime = string.Empty;
+            first.Model.IsVirtualComponent = false;
+            second.Model.IsVirtualComponent = false;
+            first.Model.FileName = second.Model.FileName = "5.SLDPRT";
+            first.Model.FullPath = @"C:\layout\parts\5.SLDPRT";
+            second.Model.FullPath = @"C:\layout\other\5.SLDPRT";
+            var externalPlan = builder.Build(scanner.Scan(root), ProjectMeshFormat.Step);
+            var externalUuid = externalPlan.Roots[0].Children[0].GeometryUuid;
+            True(externalUuid != externalPlan.Roots[1].Children[0].GeometryUuid);
+            second.Model.FullPath = first.Model.FullPath;
+            second.Model.InternalCreationTime = "2025-01-01T00:00:00.0000000";
+            Equal(externalUuid, builder.Build(scanner.Scan(root), ProjectMeshFormat.Step).Roots[1].Children[0].GeometryUuid);
+            first.Model.InternalCreationTime = "2026-02-01T00:00:00.0000000";
+            Equal(externalUuid, builder.Build(scanner.Scan(root), ProjectMeshFormat.Step).Roots[0].Children[0].GeometryUuid);
+            first.Model.InternalCreationTime = string.Empty;
+            root.Model.InternalCreationTime = string.Empty;
+            var undatedRoot = builder.Build(scanner.Scan(root), ProjectMeshFormat.Step);
+            Equal(IdentityService.AssemblyUuid(root.Model).ToString("D"), undatedRoot.AssemblyUuid);
+            first.Model.IsDirty = true;
+            Throws<ValidationException>(() => builder.Build(scanner.Scan(root), ProjectMeshFormat.Step));
+            first.Model.IsDirty = false;
+            MarkAsset(first, 1);
+            Throws<ValidationException>(() => scanner.Scan(root));
+        }
+
         private static void RobotAssetIsMetadataOnly()
         {
             var temp = TempDirectory();
@@ -1507,6 +1625,46 @@ namespace SolidWorksAssetExporter.Core.Tests
                 True(File.Exists(Path.Combine(destination, Path.GetFileName(assetPath))));
                 True(File.Exists(Path.Combine(destination, Path.GetFileName(childPath))));
                 True(!File.Exists(Path.Combine(destination, Path.GetFileName(outsidePath))));
+            }
+            finally { Directory.Delete(temp, true); }
+        }
+
+        private static void PackAndGoAcceptsInterconnectCompoundReferences()
+        {
+            var temp = TempDirectory();
+            try
+            {
+                var assetPath = Path.Combine(temp, "asset.SLDASM");
+                var childPath = Path.Combine(temp, "child.SLDPRT");
+                var stepPath = Path.Combine(temp, "original.STEP");
+                foreach (var path in new[] { assetPath, childPath, stepPath }) File.WriteAllText(path, path);
+                var compound = Path.Combine(Path.GetTempPath(), "swx12160", "IC~~", "original.STEP.SLDASM") + "|" + stepPath;
+                var asset = new FakeSwDocument("asset.SLDASM", assetPath, true)
+                {
+                    DocumentType = (int)swDocumentTypes_e.swDocASSEMBLY
+                };
+                var app = new FakeSldWorks(asset);
+                var packAndGo = new FakePackAndGo(delegate { return new[] { assetPath, childPath, compound }; });
+                packAndGo.SetDocumentSaveToNames(new object[] { assetPath, childPath, stepPath });
+                packAndGo.OmittedSourcePaths.Add(compound);
+                asset.ExtensionValue.PackAndGoValue = packAndGo;
+                var node = new SwCadNode(app, new FakeSwComponent
+                {
+                    PathValue = assetPath,
+                    VisibleValue = (int)swComponentVisibilityState_e.swComponentVisible,
+                    SuppressionState = (int)swComponentSuppressionState_e.swComponentResolved,
+                    ModelDocumentWhenResolved = asset
+                }, "/asset");
+                var destination = Path.Combine(temp, "packed");
+                var packager = new SwSourcePackager(app, new SwPluginMutationTracker(app));
+                packager.PackAsset(node, new[] { assetPath, childPath }, destination);
+                True(File.Exists(Path.Combine(destination, "asset.SLDASM")));
+                True(File.Exists(Path.Combine(destination, "child.SLDPRT")));
+                True(!File.Exists(Path.Combine(destination, "original.STEP")));
+
+                var missing = Path.Combine(temp, "missing.SLDPRT");
+                Throws<ValidationException>(() => packager.PackAsset(node, new[] { assetPath, childPath, missing },
+                    Path.Combine(temp, "missing-output")));
             }
             finally { Directory.Delete(temp, true); }
         }
@@ -1653,15 +1811,17 @@ namespace SolidWorksAssetExporter.Core.Tests
             Equal(1, duplicateContent.RegisteredVersion.Value);
         }
 
-        private static void AssetsRequiringUpgradeOpenForEditing()
+        private static void VersionUpgradeOpensOnlySelectedAsset()
         {
             var root = TempDirectory();
             try
             {
                 var assemblyPath = Path.Combine(root, "root.SLDASM");
                 var assetPath = Path.Combine(root, "asset.SLDPRT");
+                var otherPath = Path.Combine(root, "other.SLDPRT");
                 File.WriteAllText(assemblyPath, "root");
                 File.WriteAllText(assetPath, "asset");
+                File.WriteAllText(otherPath, "other");
                 var assembly = new FakeSwDocument("root.SLDASM", assemblyPath, true)
                 {
                     DocumentType = (int)swDocumentTypes_e.swDocASSEMBLY
@@ -1670,28 +1830,33 @@ namespace SolidWorksAssetExporter.Core.Tests
                 {
                     DocumentType = (int)swDocumentTypes_e.swDocPART
                 };
-                var app = new FakeSldWorks(assembly, asset);
-                var component = new FakeSwComponent
+                var other = new FakeSwDocument("other.SLDPRT", otherPath, false)
                 {
-                    PathValue = assetPath,
-                    VisibleValue = (int)swComponentVisibilityState_e.swComponentVisible,
-                    SuppressionState = (int)swComponentSuppressionState_e.swComponentResolved,
-                    ModelDocumentWhenResolved = asset
+                    DocumentType = (int)swDocumentTypes_e.swDocPART
                 };
+                var app = new FakeSldWorks(assembly, asset, other);
                 var analysis = new AnalysisResult();
                 analysis.AssetInspections.Add("asset", new AssetInspection
                 {
-                    Node = new SwCadNode(app, component, "/asset"), Version = 1,
-                    RequiresVersionUpgrade = true, SuggestedVersion = 2
+                    SourcePath = assetPath, Version = 1, RequiresVersionUpgrade = true, SuggestedVersion = 2
+                });
+                analysis.AssetInspections.Add("other", new AssetInspection
+                {
+                    SourcePath = otherPath, Version = 1, RequiresVersionUpgrade = true, SuggestedVersion = 4
                 });
 
-                var messages = new ExportCoordinator(app).OpenAssetsRequiringVersionUpgrade(analysis);
+                var upgrades = ExportCoordinator.AssetsRequiringVersionUpgrade(analysis);
+                Equal(2, upgrades.Count);
+                True(ReferenceEquals(app.ActiveDoc, assembly));
+                Equal(0, app.OpenDocCalls);
 
-                Equal(1, messages.Count);
-                True(messages[0].Contains("asset_version：v1 → 建议 v2"));
-                True(ReferenceEquals(app.ActiveDoc, asset));
+                var selected = upgrades.Single(value => value.SourcePath == otherPath);
+                Equal(4, selected.SuggestedVersion);
+                True(!new ExportCoordinator(app).OpenAssetForVersionEditing(selected.SourcePath));
+                True(ReferenceEquals(app.ActiveDoc, other));
+                Equal(1, app.OpenDocCalls);
                 Equal((int)swOpenDocOptions_e.swOpenDocOptions_Silent, app.OpenOptions.Value);
-                True(!asset.IsOpenedReadOnly());
+                True(!other.IsOpenedReadOnly());
             }
             finally { Directory.Delete(root, true); }
         }
@@ -1716,24 +1881,16 @@ namespace SolidWorksAssetExporter.Core.Tests
                     DocumentType = (int)swDocumentTypes_e.swDocASSEMBLY
                 };
                 var app = new FakeSldWorks(assembly, asset);
-                var component = new FakeSwComponent
-                {
-                    PathValue = assetPath,
-                    VisibleValue = (int)swComponentVisibilityState_e.swComponentVisible,
-                    SuppressionState = (int)swComponentSuppressionState_e.swComponentResolved,
-                    ModelDocumentWhenResolved = asset
-                };
                 var analysis = new AnalysisResult();
                 analysis.AssetInspections.Add("asset", new AssetInspection
                 {
-                    Node = new SwCadNode(app, component, "/asset"), Version = 1,
+                    SourcePath = assetPath, Version = 1,
                     RequiresVersionUpgrade = true, SuggestedVersion = 2,
                     IsEmbeddedAssetRoot = true
                 });
 
-                var messages = new ExportCoordinator(app).OpenAssetsRequiringVersionUpgrade(analysis);
-
-                Equal(0, messages.Count);
+                Equal(0, ExportCoordinator.AssetsRequiringVersionUpgrade(analysis).Count);
+                Throws<ValidationException>(() => new ExportCoordinator(app).OpenAssetForVersionEditing(assetPath));
                 True(ReferenceEquals(app.ActiveDoc, assembly));
                 True(!app.OpenOptions.HasValue);
             }
@@ -2035,6 +2192,7 @@ namespace SolidWorksAssetExporter.Core.Tests
                 var settings = WanxiangSettings(assetRoot, string.Empty);
                 settings.ExportProject = false;
                 settings.UploadAfterExport = true;
+                settings.NotifyAssemblyParser = true;
                 var handler = new AtomicUploadHttpHandler(uuid, 1, fingerprint);
 
                 WanxiangUploadCompletion result;
@@ -2045,8 +2203,141 @@ namespace SolidWorksAssetExporter.Core.Tests
                 Equal(1, handler.Requests.Count);
                 Equal("PUT /asset/" + uuid + "/v1", handler.Requests[0]);
                 True(string.IsNullOrEmpty(result.RemoteProjectDirectory));
+                True(string.IsNullOrEmpty(result.AssemblyParseJobId));
             }
             finally { Directory.Delete(assetRoot, true); }
+        }
+
+        private static void WanxiangNotifiesParserAfterArchiveUpload()
+        {
+            var root = TempDirectory();
+            try
+            {
+                var fixture = new BindingFixture();
+                var settings = ParserUploadSettings(root);
+                var directory = Path.Combine(settings.ProjectExportRoot, fixture.Plan.AssemblyUuid, "v2");
+                Directory.CreateDirectory(directory);
+                BindingWritePackage(directory, fixture);
+                var reportPath = Path.Combine(directory, "export-report.json");
+                File.AppendAllText(reportPath, "\r\n  ");
+                var originalHash = FileHash.Sha256(reportPath);
+                var requests = new List<string>();
+                var sentBodies = new List<string>();
+                var progress = new List<string>();
+                var archiveHandler = new DelegateHttpHandler(request =>
+                {
+                    requests.Add(request.Method + " " + request.RequestUri.Host);
+                    Equal("Bearer secret-key", request.Headers.Authorization.ToString());
+                    using (var bytes = new MemoryStream(request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()))
+                    using (var archive = new ZipArchive(bytes, ZipArchiveMode.Read))
+                    using (var entry = archive.GetEntry("export-report.json").Open())
+                        Equal(originalHash, FileHash.Sha256(entry));
+                    // The report on disk can change after the ZIP has already been created.
+                    File.AppendAllText(reportPath, "\t");
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"files_extracted\":3}") };
+                });
+                var parserHandler = new DelegateHttpHandler(request =>
+                {
+                    requests.Add(request.Method + " " + request.RequestUri.Host);
+                    Equal("/api/v1/integrations/assembly-packages/events", request.RequestUri.AbsolutePath);
+                    Equal("Bearer provider-token", request.Headers.Authorization.ToString());
+                    Equal("application/json", request.Content.Headers.ContentType.MediaType);
+                    True(!request.Headers.Contains("Idempotency-Key"));
+                    var bytes = request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+                    sentBodies.Add(Encoding.UTF8.GetString(bytes));
+                    XElement body;
+                    using (var reader = JsonReaderWriterFactory.CreateJsonReader(bytes, XmlDictionaryReaderQuotas.Max))
+                        body = XElement.Load(reader);
+                    Equal(6, body.Elements().Count());
+                    Equal("wanxiang.assembly-upload/v2", (string)body.Element("schema_version"));
+                    Equal(fixture.Plan.AssemblyUuid, (string)body.Element("assembly_uuid"));
+                    Equal("number", (string)body.Element("assembly_version").Attribute("type"));
+                    Equal(2, (int)body.Element("assembly_version"));
+                    Equal(originalHash, (string)body.Element("export_report_sha256"));
+                    Equal("现有项目", (string)body.Element("project").Elements().Single(e => e.Name == "name"));
+                    Equal(1, body.Element("project").Elements().Count());
+                    var eventId = (string)body.Element("event_id");
+                    Equal(Guid.ParseExact(eventId, "D").ToString("D"), eventId);
+                    if (sentBodies.Count == 1)
+                        return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                    return new HttpResponseMessage(HttpStatusCode.Accepted)
+                    {
+                        Content = new StringContent("{\"event_id\":\"" + eventId + "\",\"job_id\":\"asj-example\",\"accepted\":true}")
+                    };
+                });
+
+                using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl, settings.WanxiangApiKey, archiveHandler))
+                {
+                    var result = new WanxiangExportUploader().Upload(client, new ExportCompletion { ProjectDirectory = directory },
+                        settings, progress.Add, parserHandler);
+                    Equal(3, result.FilesExtracted);
+                    Equal("asj-example", result.AssemblyParseJobId);
+                    True(!string.IsNullOrEmpty(result.AssemblyParseEventId));
+                    True(string.IsNullOrEmpty(result.AssemblyParseError));
+                }
+                Equal("PUT localhost,POST parser.example,POST parser.example", string.Join(",", requests));
+                Equal(sentBodies[0], sentBodies[1]);
+                True(progress.Any(value => value.Contains("HTTP 202") && value.Contains("asj-example")));
+                True(originalHash != FileHash.Sha256(reportPath));
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void WanxiangDistinguishesParserNotificationFailure()
+        {
+            var root = TempDirectory();
+            try
+            {
+                var fixture = new BindingFixture();
+                var settings = ParserUploadSettings(root);
+                var directory = Path.Combine(settings.ProjectExportRoot, fixture.Plan.AssemblyUuid, "v2");
+                Directory.CreateDirectory(directory);
+                BindingWritePackage(directory, fixture);
+                var export = new ExportCompletion { ProjectDirectory = directory };
+                var uploader = new WanxiangExportUploader();
+                var notificationCount = 0;
+                using (var parser = new DelegateHttpHandler(request =>
+                {
+                    notificationCount++;
+                    return new HttpResponseMessage(HttpStatusCode.Conflict)
+                    {
+                        Content = new StringContent("{\"detail\":{\"code\":\"assembly_project_conflict\",\"message\":\"provider-token\"}}")
+                    };
+                }))
+                {
+                    using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl, settings.WanxiangApiKey,
+                        new ResponseHttpHandler(HttpStatusCode.ServiceUnavailable, "unavailable")))
+                        Throws<WanxiangDataServiceException>(() => uploader.Upload(client, export, settings, null, parser));
+                    using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl, settings.WanxiangApiKey,
+                        new ResponseHttpHandler(HttpStatusCode.Accepted, "{\"files_extracted\":0}")))
+                        Throws<ValidationException>(() => uploader.Upload(client, export, settings, null, parser));
+                    Equal(0, notificationCount);
+
+                    using (var client = new WanxiangDataClient(settings.WanxiangBaseUrl, settings.WanxiangApiKey,
+                        new ResponseHttpHandler(HttpStatusCode.OK, "{\"files_extracted\":3}")))
+                    {
+                        var result = uploader.Upload(client, export, settings, null, parser);
+                        True(result.RemoteProjectDirectory.EndsWith(fixture.Plan.AssemblyUuid + "/v2", StringComparison.Ordinal));
+                        Equal(3, result.FilesExtracted);
+                        True(string.IsNullOrEmpty(result.AssemblyParseJobId));
+                        True(result.AssemblyParseError.Contains("409"));
+                        True(!result.AssemblyParseError.Contains("provider-token"));
+                    }
+                    Equal(1, notificationCount);
+                }
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static ExporterSettings ParserUploadSettings(string root)
+        {
+            var settings = WanxiangSettings(Path.Combine(root, "assets"), Path.Combine(root, "assembly_package"));
+            settings.UploadAfterExport = true;
+            settings.NotifyAssemblyParser = true;
+            settings.AssemblyParserBaseUrl = "https://parser.example";
+            settings.AssemblyParserProviderToken = "provider-token";
+            settings.AssemblyParserProjectName = "现有项目";
+            return settings;
         }
 
         private static void WanxiangPreviewUsesRemoteRegistry()
@@ -2391,6 +2682,18 @@ namespace SolidWorksAssetExporter.Core.Tests
         }
     }
 
+    internal sealed class DelegateHttpHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
+
+        public DelegateHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) { _respond = respond; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(_respond(request));
+        }
+    }
+
     internal sealed class AtomicUploadHttpHandler : HttpMessageHandler
     {
         private readonly string _uuid;
@@ -2511,6 +2814,8 @@ namespace SolidWorksAssetExporter.Core.Tests
     {
         public FakeSwComponent()
         {
+            ComponentId = 1;
+            NameValue = "fake-component";
             PathValue = "C:\\models\\fake-component.SLDPRT";
             ReferencedConfiguration = string.Empty;
             ReferencedDisplayState = string.Empty;
@@ -2518,7 +2823,9 @@ namespace SolidWorksAssetExporter.Core.Tests
             SuppressionChanges = new List<int>();
         }
 
-        public string Name2 { get { return "fake-component"; } }
+        public string Name2 { get { return NameValue; } }
+        public string GetSelectByIDString() { return Name2; }
+        public string NameValue { get; set; }
         public int Visible { get { return VisibleValue; } }
         public int VisibleValue { get; set; }
         public int SuppressionState { get; set; }
@@ -2526,18 +2833,31 @@ namespace SolidWorksAssetExporter.Core.Tests
         public string ReferencedConfiguration { get; set; }
         public string ReferencedDisplayState { get; set; }
         public object ChildrenValue { get; set; }
+        public Component2 ParentValue { get; set; }
+        public int ChildrenReads { get; private set; }
+        public bool IsRootValue { get; set; }
+        public bool IsFixedValue { get; set; }
+        public int ComponentId { get; set; }
+        public object MatesValue { get; set; }
+        public System.Runtime.InteropServices.COMException MatesError { get; set; }
         public bool IsVirtual { get; set; }
+        public int Solving { get; set; }
+        public object TestSolidBodies { get; set; }
+        public object TestBodyInfo { get; set; }
+        public object GetBodies3(int type, out object bodyInfo) { bodyInfo = TestBodyInfo; return TestSolidBodies; }
         public ModelDoc2 ModelDocumentWhenResolved { get; set; }
         public IList<int> SuppressionChanges { get; private set; }
         public FakePropertyManagerCollection CustomPropertyManager { get; private set; }
-        public MathTransform Transform2 { get { return null; } }
-        public int GetID() { return 1; }
-        public object GetParent() { return null; }
+        public MathTransform Transform2 { get; set; }
+        public object GetBox(bool includeRefPlanes, bool includeSketches) { return null; }
+        public int GetID() { return ComponentId; }
+        public object GetParent() { return ParentValue; }
+        public bool IsRoot() { return IsRootValue; }
         public bool IsSuppressed() { return SuppressionState != (int)swComponentSuppressionState_e.swComponentResolved; }
         public int GetSuppression2() { return SuppressionState; }
         public int SetSuppression2(int state) { SuppressionChanges.Add(state); SuppressionState = state; return 2; }
         public bool IsEnvelope() { return false; }
-        public bool IsFixed() { return false; }
+        public bool IsFixed() { return IsFixedValue; }
         public bool IsHidden(bool considerSuppressed) { return SuppressionState == (int)swComponentSuppressionState_e.swComponentLightweight; }
         public bool Select4(bool append, object data, bool showPopup) { return true; }
         public object GetModelDoc2()
@@ -2546,7 +2866,12 @@ namespace SolidWorksAssetExporter.Core.Tests
                 SuppressionState == (int)swComponentSuppressionState_e.swComponentFullyResolved
                 ? ModelDocumentWhenResolved : null;
         }
-        public object GetChildren() { return ChildrenValue; }
+        public object GetChildren() { ChildrenReads++; return ChildrenValue; }
+        public object GetMates()
+        {
+            if (MatesError != null) throw MatesError;
+            return MatesValue;
+        }
         public string GetPathName() { return PathValue; }
     }
 
@@ -2710,7 +3035,7 @@ namespace SolidWorksAssetExporter.Core.Tests
         }
     }
 
-    internal sealed class FakeSwDocument : ModelDoc2
+    internal class FakeSwDocument : ModelDoc2
     {
         private readonly string _title;
         private readonly string _path;
@@ -2728,33 +3053,68 @@ namespace SolidWorksAssetExporter.Core.Tests
         public bool SaveFlag { get; set; }
         public int UpdateStamp { get; set; }
         public int DocumentType { get; set; }
+        public string CreationTime { get; set; }
+        public ConfigurationManager ConfigurationValue { get; set; }
         public FakeModelDocExtension ExtensionValue { get; private set; }
-        public ConfigurationManager ConfigurationManager { get { return null; } }
+        public ConfigurationManager ConfigurationManager { get { return ConfigurationValue; } }
         public FeatureManager FeatureManager { get { return null; } }
         public ModelDocExtension Extension { get { return ExtensionValue; } }
         public object SelectionManager { get { return null; } }
+        public ModelView IActiveView { get { return null; } }
         int ModelDoc2.GetType() { return DocumentType == 0 ? (int)swDocumentTypes_e.swDocPART : DocumentType; }
         public string GetPathName() { return _path; }
         public string GetTitle() { return _title; }
         public bool GetSaveFlag() { return SaveFlag; }
         public void SetSaveFlag() { SaveFlag = true; }
-        public bool Save3(int options, ref int errors, ref int warnings) { throw new NotSupportedException(); }
+        public virtual bool Save3(int options, ref int errors, ref int warnings) { throw new NotSupportedException(); }
         public object IGet3rdPartyStorage(string name, bool storing) { return null; }
         public void IRelease3rdPartyStorage(string name) { }
         public int GetUpdateStamp() { return UpdateStamp; }
         public bool IsOpenedReadOnly() { return OpenedReadOnly; }
-        public string get_SummaryInfo(int fieldId) { return string.Empty; }
+        public string get_SummaryInfo(int fieldId) { return CreationTime ?? string.Empty; }
         public void ClearSelection2(bool all) { }
+        public void GraphicsRedraw2() { }
         public bool ShowConfiguration2(string name) { return true; }
+        public virtual double ClosestDistance(object first, object second, out object point1, out object point2)
+        { point1 = point2 = null; return -1; }
+        public object GetConfigurationNames() { return ConfigurationManager == null ? new string[0] : new[] { ConfigurationManager.ActiveConfiguration.Name }; }
+        public object GetConfigurationByName(string name)
+        { return ConfigurationManager == null || ConfigurationManager.ActiveConfiguration.Name != name ? null : ConfigurationManager.ActiveConfiguration; }
+        public bool EditRebuild3() { throw new NotSupportedException(); }
+        public bool IsEditingSelf() { return true; }
     }
 
     internal sealed class FakeModelDocExtension : ModelDocExtension
     {
-        public object GetPersistReference3(object value) { return null; }
-        public object GetObjectByPersistReference3(object bytes, out int error) { error = 1; return null; }
+        public bool SelectByID2(string name, string type, double x, double y, double z, bool append, int mark, object callout, int option) { return false; }
+        public int MultiSelect2(object objects, bool append, object data) { return 0; }
+        public bool DeleteSelection2(int options) { throw new NotSupportedException(); }
+        public int PersistReferenceReads { get; private set; }
+        public IDictionary<int, Component2> PersistentComponents { get; private set; }
+        public object GetPersistReference3(object value)
+        {
+            var component = value as Component2;
+            return component != null && PersistentComponents.ContainsKey(component.GetID())
+                ? BitConverter.GetBytes(component.GetID()) : null;
+        }
+        public object GetObjectByPersistReference3(object bytes, out int error)
+        {
+            PersistReferenceReads++;
+            var reference = bytes as byte[];
+            Component2 component;
+            if (reference != null && reference.Length == sizeof(int) &&
+                PersistentComponents.TryGetValue(BitConverter.ToInt32(reference, 0), out component))
+            {
+                error = 0;
+                return component;
+            }
+            error = 1;
+            return null;
+        }
         public FakeModelDocExtension()
         {
             CustomPropertyManager = new FakePropertyManagerCollection();
+            PersistentComponents = new Dictionary<int, Component2>();
         }
 
         public FakePropertyManagerCollection CustomPropertyManager { get; private set; }

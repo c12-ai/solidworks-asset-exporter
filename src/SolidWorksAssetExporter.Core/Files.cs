@@ -13,6 +13,11 @@ namespace SolidWorksAssetExporter.Core
         public static string Sha256(string path)
         {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                return Sha256(stream);
+        }
+
+        public static string Sha256(Stream stream)
+        {
             using (var hash = SHA256.Create())
                 return ToHex(hash.ComputeHash(stream));
         }

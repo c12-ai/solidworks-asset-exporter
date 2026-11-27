@@ -9,3 +9,12 @@
 artifacts/
 **/__pycache__/
 *.pyc
+
+# Machine-local diagnostics, CAD backups, and generated packages.
+/.openai/
+/.tmp-*/
+/tmp/
+/dist/
+/output/
+/outputs/
+/Repair-Exporter.cmd

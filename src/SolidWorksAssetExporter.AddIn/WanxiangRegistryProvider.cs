@@ -13,6 +13,14 @@ namespace SolidWorksAssetExporter.AddIn
 
     public sealed class WanxiangRegistryProvider
     {
+        internal static AssetRegistryDocument FetchForPropertyEdit()
+        {
+            var settings = new SettingsStore().Load();
+            settings.WanxiangApiKey = new WanxiangApiKeyStore().Load();
+            settings.SaveRegistryLocally = false;
+            return new WanxiangRegistryProvider().Fetch(settings).Registry;
+        }
+
         public WanxiangRegistrySnapshot Fetch(ExporterSettings settings)
         {
             if (settings == null) throw new ArgumentNullException("settings");

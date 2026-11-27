@@ -27,6 +27,7 @@ $payload = Join-Path $packageRoot 'payload'
 $payloadFiles = @(
     'SolidWorksAssetExporter.AddIn.dll',
     'SolidWorksAssetExporter.Core.dll',
+    'SolidWorksAssetExporter.Mcp.exe',
     'SolidWorks.Interop.sldworks.dll',
     'SolidWorks.Interop.swconst.dll',
     'SolidWorks.Interop.swpublished.dll'
@@ -82,6 +83,8 @@ foreach ($name in $payloadFiles) {
     Copy-Item -LiteralPath $payloadSources[$name] -Destination $payload
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.cmd') -Destination (Join-Path $packageRoot 'Install.cmd')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-codex.cmd') -Destination (Join-Path $packageRoot 'Install-Codex.cmd')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-codex.ps1') -Destination $packageRoot
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination (Join-Path $packageRoot 'Uninstall.cmd')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'set-interactive-user-startup.ps1') -Destination $packageRoot
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-custom-property-templates.ps1') `
@@ -101,29 +104,9 @@ foreach ($document in Get-ChildItem -LiteralPath (Join-Path $repoRoot 'docs') -F
     Copy-Item -LiteralPath $document.FullName -Destination (Join-Path $packageRoot 'docs')
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'examples\instance-binding') -Destination (Join-Path $packageRoot 'examples\instance-binding') -Recurse
-$evidence = Join-Path $repoRoot 'artifacts\instance-binding-evidence'
-if (Test-Path -LiteralPath $evidence -PathType Container) {
-    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
-    Copy-Item -LiteralPath $evidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-evidence') -Recurse
-}
-$interactionEvidence = Join-Path $repoRoot 'artifacts\instance-binding-ui2-evidence'
-if (Test-Path -LiteralPath $interactionEvidence -PathType Container) {
-    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
-    Copy-Item -LiteralPath $interactionEvidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-ui2-evidence') -Recurse
-}
-
-$interfaceEvidence = Join-Path $repoRoot 'artifacts\instance-binding-ui3-evidence'
-if (Test-Path -LiteralPath $interfaceEvidence -PathType Container) {
-    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
-    Copy-Item -LiteralPath $interfaceEvidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-ui3-evidence') -Recurse
-}
+Copy-Item -LiteralPath (Join-Path $repoRoot 'skills') -Destination $packageRoot -Recurse
 
 $archive = Join-Path $output "$packageName.zip"
-$multiParentEvidence = Join-Path $repoRoot 'artifacts\instance-binding-rc4-evidence'
-if (Test-Path -LiteralPath $multiParentEvidence -PathType Container) {
-    New-Item -ItemType Directory -Path (Join-Path $packageRoot 'artifacts') -Force | Out-Null
-    Copy-Item -LiteralPath $multiParentEvidence -Destination (Join-Path $packageRoot 'artifacts\instance-binding-rc4-evidence') -Recurse
-}
 if (Test-Path -LiteralPath $archive) { throw "Release archive already exists: $archive" }
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $archive -CompressionLevel Optimal
 Get-FileHash -LiteralPath $archive -Algorithm SHA256 | Format-List

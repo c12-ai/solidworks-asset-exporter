@@ -33,6 +33,7 @@
     <Compile Include="AssetRegistry.cs" />
     <Compile Include="AssetSources.cs" />
     <Compile Include="Domain.cs" />
+    <Compile Include="ExportPlacementDiagnostics.cs" />
     <Compile Include="InstanceBindings.cs" />
     <Compile Include="Files.cs" />
     <Compile Include="IdentityAndProperties.cs" />

@@ -1,11 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SOLIDWORKS assembly relations 1.1 (multiple parents)",
+  "title": "SOLIDWORKS assembly relations 1.1 to 1.4",
+  "description": "New packages with relations use 1.3. Version 1.4 validates historical instance coupling data for reading.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "assembly_uuid", "assembly_version", "length_unit", "quaternion_order", "relations"],
   "properties": {
-    "schema_version": {"const": "1.1"},
+    "schema_version": {"enum": ["1.1", "1.2", "1.3", "1.4"]},
     "assembly_uuid": {"type": "string", "format": "uuid"},
     "assembly_version": {"type": "integer", "minimum": 1},
     "length_unit": {"const": "m"},
@@ -19,18 +20,75 @@
         "properties": {
           "parent_node_id": {"type": "string", "format": "uuid"},
           "child_node_id": {"type": "string", "format": "uuid"},
-          "pose": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["tx", "ty", "tz", "qx", "qy", "qz", "qw"],
-            "properties": {
-              "tx": {"type": "number"}, "ty": {"type": "number"}, "tz": {"type": "number"},
-              "qx": {"type": "number"}, "qy": {"type": "number"}, "qz": {"type": "number"}, "qw": {"type": "number"}
-            }
-          }
+          "pose": {"$ref": "#/$defs/pose"},
+          "slot_id": {"type": "string", "minLength": 1},
+          "slot_offset": {"$ref": "#/$defs/pose"},
+          "placement": {"$ref": "#/$defs/placement"},
+          "engagement": {"enum": ["tight", "loose"]}
+        },
+        "dependentRequired": {"slot_id": ["slot_offset"], "slot_offset": ["slot_id"]},
+        "if": {"required": ["engagement"]},
+        "then": {"required": ["placement"], "properties": {"placement": {"required": ["slot_type"]}}},
+        "else": {"properties": {"placement": {"properties": {"slot_type": false}}}}
+      }
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slot_id", "parent_node_id", "pose"],
+        "properties": {
+          "slot_id": {"type": "string", "minLength": 1},
+          "parent_node_id": {"type": "string", "format": "uuid"},
+          "pose": {"$ref": "#/$defs/pose"}
         }
       }
     }
   },
-  "$comment": "Additionally require unique XML Asset node IDs, unique (parent_node_id, child_node_id) pairs, no self edge/cycle, same-package identity, finite values and unit quaternions. A child may have multiple parents; each edge stores its own parent-relative pose."
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": "1.1"}}},
+      "then": {"properties": {"slots": false, "relations": {"items": {"properties": {"slot_id": false, "slot_offset": false}}}}}
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "1.2"}}},
+      "then": {"required": ["slots"]}
+    },
+    {
+      "if": {"properties": {"schema_version": {"enum": ["1.3", "1.4"]}}},
+      "then": {"properties": {"relations": {"items": {"required": ["placement"]}}}},
+      "else": {"properties": {"relations": {"items": {"properties": {"placement": false}}}}}
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "1.4"}}},
+      "then": {"properties": {"relations": {"contains": {"required": ["engagement"]}}}},
+      "else": {"properties": {"relations": {"items": {"properties": {"engagement": false}}}}}
+    }
+  ],
+  "$defs": {
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot_key", "parent_asset_uuid", "child_asset_uuid", "pose"],
+      "properties": {
+        "slot_key": {"type": "string", "format": "uuid"},
+        "parent_asset_uuid": {"type": "string", "format": "uuid"},
+        "child_asset_uuid": {"type": "string", "format": "uuid"},
+        "pose": {"$ref": "#/$defs/pose"},
+        "slot_type": {"const": "clamp"}
+      }
+    },
+    "pose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tx", "ty", "tz", "qx", "qy", "qz", "qw"],
+      "properties": {
+        "tx": {"type": "number"}, "ty": {"type": "number"}, "tz": {"type": "number"},
+        "qx": {"type": "number"}, "qy": {"type": "number"}, "qz": {"type": "number"}, "qw": {"type": "number"}
+      }
+    }
+  },
+  "$comment": "Additionally require unique XML Asset node IDs, unique parent-child pairs, no self edge/cycle, same-package identity, finite poses and unit quaternions. Slot IDs must be unique and each slot must have at least one relation referencing it under the same parent. In 1.4 only explicit shared slots can repeat a placement.slot_key; that key equals the shared slot_id. All rows for a shared slot must agree on slot_type (including absence), with at most one tight engagement. The relation validator enforces these cross-row constraints."
 }

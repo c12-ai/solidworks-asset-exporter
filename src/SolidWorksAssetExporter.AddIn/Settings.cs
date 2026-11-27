@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.Serialization;
+using System.Security.Cryptography;
 using System.Text;
 using SolidWorksAssetExporter.Core;
 
@@ -27,6 +28,14 @@ namespace SolidWorksAssetExporter.AddIn
         [DataMember(Name = "save_registry_locally", Order = 8)] public bool SaveRegistryLocally { get; set; }
         [DataMember(Name = "export_project", Order = 9, EmitDefaultValue = false)]
         public bool? ExportProjectOption { get; set; }
+        [DataMember(Name = "notify_assembly_parser", Order = 10, EmitDefaultValue = false)]
+        public bool NotifyAssemblyParser { get; set; }
+        [DataMember(Name = "assembly_parser_base_url", Order = 11, EmitDefaultValue = false)]
+        public string AssemblyParserBaseUrl { get; set; }
+        [DataMember(Name = "assembly_parser_project_code", Order = 12, EmitDefaultValue = false)]
+        public string AssemblyParserProjectCode { get; set; }
+        [DataMember(Name = "assembly_parser_project_name", Order = 13, EmitDefaultValue = false)]
+        public string AssemblyParserProjectName { get; set; }
         [IgnoreDataMember]
         public bool ExportProject
         {
@@ -34,6 +43,7 @@ namespace SolidWorksAssetExporter.AddIn
             set { ExportProjectOption = value; }
         }
         [IgnoreDataMember] public string WanxiangApiKey { get; set; }
+        [IgnoreDataMember] public string AssemblyParserProviderToken { get; set; }
 
         public void Validate()
         {
@@ -58,6 +68,17 @@ namespace SolidWorksAssetExporter.AddIn
                 (serviceUri.Scheme != Uri.UriSchemeHttp && serviceUri.Scheme != Uri.UriSchemeHttps))
                 throw new ValidationException("Wanxiang 数据服务地址必须是有效的 http/https URL。");
             if (string.IsNullOrWhiteSpace(WanxiangApiKey)) throw new ValidationException("Wanxiang API key 不能为空。");
+        }
+
+        public void ValidateAssemblyParser()
+        {
+            if (!NotifyAssemblyParser || !UploadAfterExport || !ExportProject) return;
+            if (!WanxiangAssemblyParserClient.IsValidBaseUrl(AssemblyParserBaseUrl))
+                throw new ValidationException("请填写 Wanxiang 解析服务的 HTTP 或 HTTPS 根地址。");
+            if (!WanxiangAssemblyParserClient.IsValidProviderToken(AssemblyParserProviderToken))
+                throw new ValidationException("请填写有效的 Wanxiang 装配提供方令牌。");
+            if (string.IsNullOrWhiteSpace(AssemblyParserProjectCode) == string.IsNullOrWhiteSpace(AssemblyParserProjectName))
+                throw new ValidationException("请填写一个已有 Wanxiang 项目的编号或名称。");
         }
 
         public void ApplyDefaults()
@@ -141,6 +162,52 @@ namespace SolidWorksAssetExporter.AddIn
             File.WriteAllText(temporary, apiKey.Trim() + Environment.NewLine, new UTF8Encoding(false));
             if (File.Exists(KeyPath)) File.Replace(temporary, KeyPath, null);
             else File.Move(temporary, KeyPath);
+        }
+    }
+
+    internal sealed class AssemblyParserTokenStore
+    {
+        private static string TokenPath
+        {
+            get
+            {
+                return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksAssetExporter", "assembly-provider-api-token.dpapi");
+            }
+        }
+
+        public string Load()
+        {
+            var path = TokenPath;
+            if (!File.Exists(path)) return string.Empty;
+            var token = ProtectedData.Unprotect(File.ReadAllBytes(path), null, DataProtectionScope.CurrentUser);
+            try { return Encoding.UTF8.GetString(token); }
+            finally { Array.Clear(token, 0, token.Length); }
+        }
+
+        public void Save(string providerToken)
+        {
+            var path = TokenPath;
+            if (string.IsNullOrWhiteSpace(providerToken))
+            {
+                if (File.Exists(path)) File.Delete(path);
+                return;
+            }
+            var directory = Path.GetDirectoryName(path);
+            Directory.CreateDirectory(directory);
+            var temporary = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".tmp");
+            var token = Encoding.UTF8.GetBytes(providerToken.Trim());
+            try
+            {
+                File.WriteAllBytes(temporary, ProtectedData.Protect(token, null, DataProtectionScope.CurrentUser));
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
+            }
+            finally
+            {
+                Array.Clear(token, 0, token.Length);
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
         }
     }
 }

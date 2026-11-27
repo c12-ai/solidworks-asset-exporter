@@ -24,12 +24,23 @@ namespace SolidWorksAssetExporter.AddIn
     }
 
     [DataContract]
+    internal sealed class WanxiangDirectoryEntry
+    {
+        [DataMember(Name = "name", IsRequired = true)] public string Name { get; set; }
+        [DataMember(Name = "type", IsRequired = true)] public string Type { get; set; }
+        [DataMember(Name = "size", IsRequired = true)] public long Size { get; set; }
+        [DataMember(Name = "mtime", IsRequired = true)] public double Modified { get; set; }
+    }
+
+    [DataContract]
     public sealed class WanxiangDirectoryUploadResult
     {
         [DataMember(Name = "path")] public string Path { get; set; }
         [DataMember(Name = "files_extracted")] public int FilesExtracted { get; set; }
         [DataMember(Name = "bytes_written")] public long BytesWritten { get; set; }
         [IgnoreDataMember] public int HttpStatusCode { get; set; }
+        internal ExportReport ExportReport { get; set; }
+        internal string ExportReportSha256 { get; set; }
     }
 
     public sealed class WanxiangRegistryDownloadResult
@@ -112,6 +123,12 @@ namespace SolidWorksAssetExporter.AddIn
         {
         }
 
+        internal WanxiangDataClient(string baseUrl, string apiKey, HttpMessageHandler handler, TimeSpan timeout)
+            : this(baseUrl, apiKey, handler, null)
+        {
+            _http.Timeout = timeout;
+        }
+
         public WanxiangDataClient(string baseUrl, string apiKey, HttpMessageHandler handler,
             Action<string> diagnostic)
         {
@@ -136,6 +153,12 @@ namespace SolidWorksAssetExporter.AddIn
         public WanxiangDirectoryUploadResult UploadDirectory(string localDirectory, string remoteDirectory,
             Action<string> progress)
         {
+            return UploadDirectory(localDirectory, remoteDirectory, progress, false);
+        }
+
+        internal WanxiangDirectoryUploadResult UploadDirectory(string localDirectory, string remoteDirectory,
+            Action<string> progress, bool includeExportReport)
+        {
             localDirectory = Path.GetFullPath(localDirectory);
             if (!Directory.Exists(localDirectory)) throw new DirectoryNotFoundException("待上传目录不存在：" + localDirectory);
             var requestUri = Url("archive", remoteDirectory);
@@ -149,6 +172,8 @@ namespace SolidWorksAssetExporter.AddIn
                 var archiveBytes = new FileInfo(archivePath).Length;
                 Diagnostic("PROJECT PACK COMPLETE bytes=" + archiveBytes.ToString(CultureInfo.InvariantCulture) +
                     " elapsed_ms=" + elapsed.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+                string reportSha256 = null;
+                var report = includeExportReport ? ReadArchiveExportReport(archivePath, out reportSha256) : null;
                 Report(progress, "Wanxiang assembly_package 打包完成（" + FormatBytes(archiveBytes) + "），正在发送到 Wanxiang...");
                 using (var stream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var content = new StreamContent(stream))
@@ -165,8 +190,12 @@ namespace SolidWorksAssetExporter.AddIn
                         Report(progress, "Wanxiang assembly_package 已收到 HTTP " + ((int)response.StatusCode).ToString(
                             CultureInfo.InvariantCulture) + "，正在校验响应...");
                         EnsureSuccess(response, body);
+                        if (includeExportReport && response.StatusCode == HttpStatusCode.Accepted)
+                            throw new ValidationException("数据服务已接收装配包上传请求（HTTP 202），尚未确认写入完成。");
                         var result = Deserialize<WanxiangDirectoryUploadResult>(body);
                         result.HttpStatusCode = (int)response.StatusCode;
+                        result.ExportReport = report;
+                        result.ExportReportSha256 = reportSha256;
                         Report(progress, "Wanxiang assembly_package 上传完成：HTTP " + result.HttpStatusCode.ToString(
                             CultureInfo.InvariantCulture) + "，服务端写入 " + result.FilesExtracted.ToString(
                             CultureInfo.InvariantCulture) + " 个文件。");
@@ -201,6 +230,47 @@ namespace SolidWorksAssetExporter.AddIn
                     var body = ReadBody(response);
                     EnsureSuccess(response, body);
                     return Deserialize<WanxiangFileUploadResult>(body);
+                }
+            }
+        }
+
+        internal List<WanxiangDirectoryEntry> ListDirectory(string remoteDirectory)
+        {
+            using (var response = _http.GetAsync(Url("list", remoteDirectory)).GetAwaiter().GetResult())
+            {
+                if (response.StatusCode == HttpStatusCode.NotFound) return new List<WanxiangDirectoryEntry>();
+                var body = ReadBody(response);
+                EnsureSuccess(response, body);
+                if (response.StatusCode != HttpStatusCode.OK) throw new InvalidDataException("Wanxiang 未返回完整的目录列表。");
+                return Deserialize<List<WanxiangDirectoryEntry>>(body);
+            }
+        }
+
+        internal byte[] DownloadFileBytes(string remotePath)
+        {
+            using (var response = _http.GetAsync(Url("files", remotePath)).GetAwaiter().GetResult())
+            {
+                if (!response.IsSuccessStatusCode) EnsureSuccess(response, ReadBody(response));
+                if (response.StatusCode != HttpStatusCode.OK || response.Content == null)
+                    throw new InvalidDataException("Wanxiang 未返回完整的接口候选文件。");
+                return response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+            }
+        }
+
+        internal void UploadJsonFile(string remotePath, byte[] bytes)
+        {
+            using (var content = new ByteArrayContent(bytes))
+            {
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+                using (var response = _http.PutAsync(Url("files", remotePath), content).GetAwaiter().GetResult())
+                {
+                    var body = ReadBody(response);
+                    EnsureSuccess(response, body);
+                    var result = Deserialize<WanxiangFileUploadResult>(body);
+                    if ((response.StatusCode != HttpStatusCode.Created && response.StatusCode != HttpStatusCode.OK) ||
+                        result == null || result.Path != WanxiangRemotePath.Normalize(remotePath) ||
+                        result.Size != bytes.LongLength || result.Overwritten != (response.StatusCode == HttpStatusCode.OK))
+                        throw new InvalidDataException("Wanxiang 未确认写入指定的接口候选文件。");
                 }
             }
         }
@@ -304,7 +374,7 @@ namespace SolidWorksAssetExporter.AddIn
         }
 
         public WanxiangAssetRegistrationResult PublishAssetVersion(string localDirectory, string uuid,
-            int version, string contentFingerprint)
+            int version, string contentFingerprint, string expectedName = null)
         {
             localDirectory = Path.GetFullPath(localDirectory);
             if (!Directory.Exists(localDirectory))
@@ -367,6 +437,7 @@ namespace SolidWorksAssetExporter.AddIn
                             !string.Equals(result.Registration.Uuid, normalizedUuid,
                                 StringComparison.OrdinalIgnoreCase) || result.Registration.Version != version ||
                             string.IsNullOrWhiteSpace(result.Registration.Name) ||
+                            (expectedName != null && !string.Equals(result.Registration.Name, expectedName, StringComparison.Ordinal)) ||
                             !string.Equals((result.Registration.RelativeDirectory ?? string.Empty).Replace('\\', '/'),
                                 expectedRelativeDirectory, StringComparison.OrdinalIgnoreCase) ||
                             !string.Equals(result.Registration.ContentFingerprint, contentFingerprint,
@@ -488,6 +559,25 @@ namespace SolidWorksAssetExporter.AddIn
                     var entry = archive.CreateEntry(relative.Replace('\\', '/'), CompressionLevel.Optimal);
                     using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
                     using (var output = entry.Open()) input.CopyTo(output);
+                }
+            }
+        }
+
+        private static ExportReport ReadArchiveExportReport(string archivePath, out string sha256)
+        {
+            using (var stream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                var entry = archive.GetEntry("export-report.json");
+                if (entry == null) throw new ValidationException("装配包 ZIP 缺少 export-report.json。");
+                using (var source = entry.Open())
+                using (var report = new MemoryStream())
+                {
+                    source.CopyTo(report);
+                    report.Position = 0;
+                    sha256 = FileHash.Sha256(report);
+                    report.Position = 0;
+                    return JsonFile.Read<ExportReport>(report);
                 }
             }
         }

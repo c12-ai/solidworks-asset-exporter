@@ -22,6 +22,8 @@ namespace SolidWorksAssetExporter.Core
     [DataContract]
     public sealed class AssetManifest
     {
+        internal const string CanHoldContentsField = "can_hold_contents";
+
         public AssetManifest()
         {
             Properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -31,8 +33,26 @@ namespace SolidWorksAssetExporter.Core
         [DataMember(Name = "uuid", Order = 2)] public string Uuid { get; set; }
         [DataMember(Name = "version", Order = 3)] public int Version { get; set; }
         [DataMember(Name = "content_fingerprint", Order = 4)] public string ContentFingerprint { get; set; }
-        [DataMember(Name = "properties", Order = 5)] public IDictionary<string, string> Properties { get; set; }
+        public IDictionary<string, string> Properties { get; set; }
+
+        [DataMember(Name = "properties", Order = 5)]
+        private IDictionary<string, string> SerializedProperties
+        {
+            get
+            {
+                if (Properties == null || !Properties.Keys.Any(key => key.Equals(PropertyRules.SlotType, StringComparison.OrdinalIgnoreCase)))
+                    return Properties;
+                var exported = new Dictionary<string, string>(Properties, StringComparer.OrdinalIgnoreCase);
+                var slotType = PropertyRules.ReadAssetSlotType(exported);
+                exported.Remove(PropertyRules.SlotType);
+                if (slotType.Length != 0) exported.Add(PropertyRules.SlotType, slotType);
+                return exported;
+            }
+            set { Properties = value; }
+        }
         [DataMember(Name = "files", Order = 6)] public IList<ManifestFile> Files { get; set; }
+        [DataMember(Name = CanHoldContentsField, Order = 7, EmitDefaultValue = false)]
+        public bool? CanHoldContents { get; set; }
     }
 
     [DataContract]
@@ -72,9 +92,18 @@ namespace SolidWorksAssetExporter.Core
 
         public static T Read<T>(string path)
         {
-            var serializer = Create(typeof(T));
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-                return (T)serializer.ReadObject(stream);
+                return Read<T>(stream);
+        }
+
+        public static T Read<T>(Stream stream)
+        {
+            return (T)Create(typeof(T)).ReadObject(stream);
+        }
+
+        internal static T Read<T>(XmlReader reader)
+        {
+            return (T)Create(typeof(T)).ReadObject(reader);
         }
 
         private static DataContractJsonSerializer Create(Type type)
@@ -114,7 +143,7 @@ namespace SolidWorksAssetExporter.Core
                 new XAttribute("id", node.Id),
                 new XAttribute("parent_id", node.ParentId ?? string.Empty),
                 new XAttribute("name", node.Name ?? string.Empty),
-                new XAttribute("kind", workstation ? "workstation" : node.Kind.ToString().ToLowerInvariant()));
+                new XAttribute("kind", node.Kind.ToString().ToLowerInvariant()));
             if (workstation) element.Add(new XAttribute("workstation_name", WorkstationName(node)));
             element.Add(new XElement("pose",
                 Number("tx", node.Pose.Tx), Number("ty", node.Pose.Ty), Number("tz", node.Pose.Tz),
@@ -130,10 +159,7 @@ namespace SolidWorksAssetExporter.Core
 
         public static bool IsWorkstation(ExportNode node)
         {
-            if (node.Source == null) return false;
-            var source = node.Source as ICadClassificationSource;
-            var model = source == null ? node.Source.Model : source.ClassificationModel;
-            return PropertyRules.ReadIsWorkstation(node.Properties, model.DocumentKind);
+            return node.Kind == ExportNodeKind.Workstation;
         }
 
         public static string WorkstationName(ExportNode node)
@@ -161,16 +187,28 @@ namespace SolidWorksAssetExporter.Core
         public static ExistingAssetState Inspect(string assetVersionDirectory, string expectedUuid, int expectedVersion,
             string currentContentFingerprint, Func<string, string> hashFile)
         {
+            return Inspect(assetVersionDirectory, expectedUuid, expectedVersion, currentContentFingerprint, hashFile, null);
+        }
+
+        public static ExistingAssetState Inspect(string assetVersionDirectory, string expectedUuid, int expectedVersion,
+            string currentContentFingerprint, Func<string, string> hashFile, bool? expectedCanHoldContents)
+        {
             if (hashFile == null) throw new ArgumentNullException("hashFile");
             var manifestPath = Path.Combine(assetVersionDirectory,
                 "asset_" + expectedUuid + "_v" + expectedVersion.ToString(CultureInfo.InvariantCulture) + ".json");
             if (!Directory.Exists(assetVersionDirectory) && !File.Exists(manifestPath)) return ExistingAssetState.Missing;
             if (!File.Exists(manifestPath)) throw new ValidationException("Asset 版本目录存在但缺少 manifest: [" + manifestPath + "]。");
             AssetManifest manifest;
-            try { manifest = JsonFile.Read<AssetManifest>(manifestPath); }
+            try { manifest = ReadManifest(manifestPath); }
             catch (Exception ex) { throw new ValidationException("Asset manifest 无法读取: " + ex.Message); }
-            if (!string.Equals(manifest.Uuid, expectedUuid, StringComparison.OrdinalIgnoreCase) || manifest.Version != expectedVersion)
+            if (manifest == null || !string.Equals(manifest.Uuid, expectedUuid, StringComparison.OrdinalIgnoreCase) ||
+                manifest.Version != expectedVersion)
                 throw new ValidationException("Asset manifest 的 UUID/版本与目录不一致。");
+            if (expectedCanHoldContents.HasValue)
+            {
+                var mismatch = DescribeContentsCapabilityMismatch(manifest, expectedCanHoldContents.Value);
+                if (mismatch != null) throw new ValidationException(mismatch);
+            }
             if (!string.Equals(manifest.ContentFingerprint, currentContentFingerprint, StringComparison.OrdinalIgnoreCase))
                 throw new ValidationException("Asset ID 已存在但当前模型内容不同；请提升 asset_version。");
             var assetPaths = new HashSet<string>((manifest.Files ?? new List<ManifestFile>()).Select(value => (value.Path ?? string.Empty).Replace('\\', '/')),
@@ -204,6 +242,31 @@ namespace SolidWorksAssetExporter.Core
             return ExistingAssetState.Reusable;
         }
 
+        public static AssetManifest ReadManifest(string path)
+        {
+            using (var stream = File.OpenRead(path))
+            using (var reader = JsonReaderWriterFactory.CreateJsonReader(stream, XmlDictionaryReaderQuotas.Max))
+            {
+                // DataContractJsonSerializer also coerces JSON strings and numbers to booleans.
+                var json = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+                var fields = json.Root.Elements(AssetManifest.CanHoldContentsField).ToList();
+                if (fields.Count > 1 || fields.Any(field => (string)field.Attribute("type") != "boolean"))
+                    throw new ValidationException("Asset manifest 的 can_hold_contents 必须是单个 JSON 布尔值。");
+                using (var mappedReader = json.CreateReader())
+                    return JsonFile.Read<AssetManifest>(mappedReader);
+            }
+        }
+
+        public static string DescribeContentsCapabilityMismatch(AssetManifest manifest, bool expected)
+        {
+            if (!manifest.CanHoldContents.HasValue)
+                return "已存在的 Asset manifest 缺少顶层 can_hold_contents。";
+            if (manifest.CanHoldContents.Value != expected)
+                return "Asset manifest 的 can_hold_contents 已从 " +
+                    XmlConvert.ToString(manifest.CanHoldContents.Value) + " 变为 " + XmlConvert.ToString(expected) + "。";
+            return null;
+        }
+
         public static IList<ManifestFile> DescribeFiles(string root, IEnumerable<string> relativePaths)
         {
             return relativePaths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).Select(relativePath =>
@@ -215,11 +278,20 @@ namespace SolidWorksAssetExporter.Core
         }
     }
 
-    public enum ExistingProjectState { Missing, Reusable }
+    public enum ExistingProjectState { Missing, Reusable, ContentChanged }
 
     public static class ProjectReportValidator
     {
         public static ExistingProjectState Inspect(string projectVersionDirectory, string expectedAssemblyUuid,
+            int expectedVersion, string currentContentFingerprint)
+        {
+            var state = InspectVersion(projectVersionDirectory, expectedAssemblyUuid, expectedVersion, currentContentFingerprint);
+            if (state == ExistingProjectState.ContentChanged)
+                throw new ValidationException("assembly_package 版本已存在但当前内容不同；需要提升 assembly_version。");
+            return state;
+        }
+
+        public static ExistingProjectState InspectVersion(string projectVersionDirectory, string expectedAssemblyUuid,
             int expectedVersion, string currentContentFingerprint)
         {
             var reportPath = Path.Combine(projectVersionDirectory, "export-report.json");
@@ -230,8 +302,6 @@ namespace SolidWorksAssetExporter.Core
             catch (Exception ex) { throw new ValidationException("assembly_package export report 无法读取: " + ex.Message); }
             if (!string.Equals(report.AssemblyUuid, expectedAssemblyUuid, StringComparison.OrdinalIgnoreCase) || report.AssemblyVersion != expectedVersion)
                 throw new ValidationException("assembly_package export report 的 UUID/版本与目录不一致。");
-            if (!string.Equals(report.ContentFingerprint, currentContentFingerprint, StringComparison.OrdinalIgnoreCase))
-                throw new ValidationException("assembly_package 版本已存在但当前内容不同；请提升 assembly_version。");
             var projectPaths = new HashSet<string>((report.Files ?? new List<ManifestFile>()).Select(value => (value.Path ?? string.Empty).Replace('\\', '/')),
                 StringComparer.OrdinalIgnoreCase);
             if (projectPaths.Count != (report.Files ?? new List<ManifestFile>()).Count ||
@@ -251,7 +321,7 @@ namespace SolidWorksAssetExporter.Core
             }
             if (report.RelationsSchemaVersion != null || projectPaths.Contains(AssemblyRelations.FileName))
             {
-                if (report.RelationsSchemaVersion != null && report.RelationsSchemaVersion != "1.0" && report.RelationsSchemaVersion != AssemblyRelations.CurrentSchemaVersion || !projectPaths.Contains(AssemblyRelations.FileName))
+                if ((report.RelationsSchemaVersion != null && !AssemblyRelations.SupportsVersion(report.RelationsSchemaVersion)) || !projectPaths.Contains(AssemblyRelations.FileName))
                     throw new ValidationException("assembly_package report 缺少承载关系文件声明或格式版本不受支持。");
                 try
                 {
@@ -264,7 +334,8 @@ namespace SolidWorksAssetExporter.Core
                 catch (ValidationException) { throw; }
                 catch (Exception ex) { throw new ValidationException("assembly_package 承载关系文件无法验证：" + ex.Message); }
             }
-            return ExistingProjectState.Reusable;
+            return string.Equals(report.ContentFingerprint, currentContentFingerprint, StringComparison.OrdinalIgnoreCase)
+                ? ExistingProjectState.Reusable : ExistingProjectState.ContentChanged;
         }
     }
 }

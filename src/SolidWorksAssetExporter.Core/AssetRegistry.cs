@@ -96,7 +96,7 @@ namespace SolidWorksAssetExporter.Core
                 Kind = AssetVersionDecisionKind.UpgradeRequired,
                 CanExport = false,
                 RegisteredVersion = maximumVersion,
-                SuggestedVersion = maximumVersion + 1
+                SuggestedVersion = maximumVersion == int.MaxValue ? (int?)null : maximumVersion + 1
             };
         }
     }
@@ -104,6 +104,63 @@ namespace SolidWorksAssetExporter.Core
     public static class AssetRegistryStore
     {
         public const string FileName = "asset-registry.json";
+
+        public static IDictionary<string, string> AllocateNames(IEnumerable<KeyValuePair<string, string>> requests,
+            IEnumerable<AssetRegistration> knownAssets)
+        {
+            var known = knownAssets.Where(asset => !string.IsNullOrWhiteSpace(asset.Name)).ToArray();
+            var owners = known.ToLookup(asset => Canonical.Normalize(asset.Name), asset => asset.Uuid, StringComparer.Ordinal);
+            var selected = new HashSet<string>(StringComparer.Ordinal);
+            var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var request in requests.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                var name = (request.Value ?? "").Trim();
+                if (name.Length == 0) continue;
+                var suffixed = name + " [" + request.Key + "]";
+                var previous = known.Where(asset => string.Equals(asset.Uuid, request.Key, StringComparison.OrdinalIgnoreCase) &&
+                        (asset.Name == suffixed || asset.Name.StartsWith(suffixed + "-", StringComparison.Ordinal)))
+                    .OrderByDescending(asset => asset.Version).Select(asset => asset.Name).FirstOrDefault();
+                Func<string, bool> available = value => !owners[Canonical.Normalize(value)].Any(uuid =>
+                    !string.Equals(uuid, request.Key, StringComparison.OrdinalIgnoreCase)) && !selected.Contains(Canonical.Normalize(value));
+                var candidate = previous != null && available(previous) ? previous : name;
+                if (!available(candidate))
+                {
+                    candidate = suffixed;
+                    for (var suffix = 2; !available(candidate); suffix++)
+                        candidate = suffixed + "-" + suffix.ToString(CultureInfo.InvariantCulture);
+                }
+                selected.Add(Canonical.Normalize(candidate));
+                names.Add(request.Key, candidate);
+            }
+            return names;
+        }
+
+        public static IEnumerable<AssetRegistration> LocalPackageNames(string assetLibraryRoot)
+        {
+            if (!Directory.Exists(assetLibraryRoot)) yield break;
+            foreach (var directory in Directory.EnumerateDirectories(assetLibraryRoot))
+            {
+                Guid uuid;
+                if (!Guid.TryParseExact(Path.GetFileName(directory), "D", out uuid)) continue;
+                foreach (var versionDirectory in Directory.EnumerateDirectories(directory, "v*"))
+                {
+                    var label = Path.GetFileName(versionDirectory);
+                    int version;
+                    if (label.Length < 2 || !int.TryParse(label.Substring(1), NumberStyles.None, CultureInfo.InvariantCulture, out version) || version <= 0) continue;
+                    var path = Path.Combine(versionDirectory, "asset_" + uuid.ToString("D") + "_" + label + ".json");
+                    if (!File.Exists(path)) continue;
+                    AssetManifest manifest;
+                    try { manifest = JsonFile.Read<AssetManifest>(path); }
+                    catch (SerializationException) { continue; }
+                    catch (System.Xml.XmlException) { continue; }
+                    string name;
+                    if (manifest != null && manifest.Properties != null && manifest.Version == version &&
+                        string.Equals(manifest.Uuid, uuid.ToString("D"), StringComparison.OrdinalIgnoreCase) &&
+                        manifest.Properties.TryGetValue(PropertyRules.PartName, out name) && !string.IsNullOrWhiteSpace(name))
+                        yield return new AssetRegistration { Uuid = uuid.ToString("D"), Version = version, Name = name };
+                }
+            }
+        }
 
         public static AssetRegistryDocument Load(string assetLibraryRoot)
         {

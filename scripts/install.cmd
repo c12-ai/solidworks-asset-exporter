@@ -31,6 +31,7 @@ if not exist "%STARTUP_SCRIPT%" (
 for %%F in (
     SolidWorksAssetExporter.AddIn.dll
     SolidWorksAssetExporter.Core.dll
+    SolidWorksAssetExporter.Mcp.exe
     SolidWorks.Interop.sldworks.dll
     SolidWorks.Interop.swconst.dll
     SolidWorks.Interop.swpublished.dll
@@ -47,6 +48,7 @@ if errorlevel 1 goto :copy_error
 for %%F in (
     SolidWorksAssetExporter.AddIn.dll
     SolidWorksAssetExporter.Core.dll
+    SolidWorksAssetExporter.Mcp.exe
     SolidWorks.Interop.sldworks.dll
     SolidWorks.Interop.swconst.dll
     SolidWorks.Interop.swpublished.dll
